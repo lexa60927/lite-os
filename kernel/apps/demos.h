@@ -7,19 +7,18 @@
 #ifndef DEMOS_H
 #define DEMOS_H
 
+#include <stdint.h>
+
 /* Open demo (0=Cube, 1=Snake, 2=Speaker) */
-void demo_open(int type);
+void demos_open(int type);
 
 /* Close demo */
-void demo_close(void);
+void demos_close(void);
 
 /* Handle keyboard input */
-void demo_handle_key(char key);
+void demos_handle_key(char key);
 
 /* Update display */
-void demo_update(void);
-
-/* PC Speaker control */
-void speaker_play(uint16_t frequency);
+void demos_update(void);
 
 #endif /* DEMOS_H */

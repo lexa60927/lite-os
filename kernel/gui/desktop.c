@@ -10,7 +10,9 @@
 #include "../drivers/vga.h"
 #include "../arch/i386/pic.h"
 #include "../io.h"
+#include "../memory/heap.h"
 #include <stdint.h>
+#include <stddef.h>
 
 /* GUI state */
 static int gui_running = 0;
@@ -30,6 +32,14 @@ static start_menu_t start_menu = {
 #define MAX_WINDOWS 8
 static window_t windows[MAX_WINDOWS];
 static int num_windows = 0;
+
+/* Application windows array */
+#define MAX_GUI_WINDOWS 16
+static gui_window_t* gui_windows[MAX_GUI_WINDOWS];
+static int num_gui_windows = 0;
+
+/* Forward declaration */
+static void gui_handle_app_window_click(int x, int y, int button);
 
 /* Mouse cursor sprite (16x16 arrow) */
 static const uint8_t cursor_sprite[16][2] = {
@@ -191,6 +201,7 @@ void gui_create_default_windows(void) {
 
 /* Handle mouse click */
 void gui_handle_click(int x, int y, int button) {
+    (void)button;  /* Use button parameter for future expansion */
     int tb_y = screen_height - TASKBAR_HEIGHT;
     
     /* Check start button click */
@@ -203,24 +214,27 @@ void gui_handle_click(int x, int y, int button) {
     if (start_menu.visible) {
         int mx = start_menu.x;
         int my = start_menu.y;
-        if (x >= mx + 10 && x <= mx + start_menu.width - 10 &&
+        if (x >= mx + 10 && x <= mx + (int)start_menu.width - 10 &&
             y >= my + 120 && y <= my + 150) {
             gui_exit();
             return;
         }
         
         /* Click outside start menu closes it */
-        if (x < mx || x > mx + start_menu.width ||
-            y < my || y > my + start_menu.height) {
+        if (x < mx || x > mx + (int)start_menu.width ||
+            y < my || y > my + (int)start_menu.height) {
             start_menu.visible = 0;
         }
     }
     
-    /* Check window close buttons */
+    /* Check application windows first (they're on top) */
+    gui_handle_app_window_click(x, y, button);
+    
+    /* Check default window close buttons */
     for (int i = 0; i < num_windows; i++) {
         window_t* win = &windows[i];
         if (win->visible) {
-            int close_x = win->x + win->width - 22;
+            int close_x = win->x + (int)win->width - 22;
             int close_y = win->y + 2;
             if (x >= close_x && x <= close_x + 18 &&
                 y >= close_y && y <= close_y + 16) {
@@ -352,4 +366,128 @@ int gui_get_screen_width(void) {
 /* Get screen height */
 int gui_get_screen_height(void) {
     return screen_height;
+}
+
+/* Create a new GUI window for applications */
+gui_window_t* gui_create_window(const char* title, int x, int y, uint32_t width, uint32_t height) {
+    if (num_gui_windows >= MAX_GUI_WINDOWS) {
+        return NULL;
+    }
+    
+    gui_window_t* win = (gui_window_t*)kmalloc(sizeof(gui_window_t));
+    if (!win) {
+        return NULL;
+    }
+    
+    win->x = x;
+    win->y = y;
+    win->width = width;
+    win->height = height;
+    win->active = 1;
+    win->visible = 0;  /* Hidden by default */
+    win->draggable = 1;
+    win->draw_content = NULL;
+    win->handle_click = NULL;
+    win->handle_key = NULL;
+    win->user_data = NULL;
+    
+    /* Copy title */
+    int i = 0;
+    while (title[i] && i < 63) {
+        win->title[i] = title[i];
+        i++;
+    }
+    win->title[i] = '\0';
+    
+    gui_windows[num_gui_windows++] = win;
+    return win;
+}
+
+/* Destroy a GUI window */
+void gui_destroy_window(gui_window_t* win) {
+    if (!win) return;
+    
+    /* Find and remove from array */
+    for (int i = 0; i < num_gui_windows; i++) {
+        if (gui_windows[i] == win) {
+            /* Shift remaining windows */
+            for (int j = i; j < num_gui_windows - 1; j++) {
+                gui_windows[j] = gui_windows[j + 1];
+            }
+            num_gui_windows--;
+            kfree(win);
+            return;
+        }
+    }
+}
+
+/* Show a GUI window */
+void gui_show_window(gui_window_t* win) {
+    if (!win) return;
+    win->visible = 1;
+    gui_redraw_window(win);
+}
+
+/* Hide a GUI window */
+void gui_hide_window(gui_window_t* win) {
+    if (!win) return;
+    win->visible = 0;
+}
+
+/* Redraw a GUI window */
+void gui_redraw_window(gui_window_t* win) {
+    if (!win || !win->visible) return;
+    
+    /* Window shadow */
+    vbe_fill_rect(win->x + 3, win->y + 3, win->width, win->height, 
+                  0x40, 0x40, 0x40);
+    
+    /* Window background */
+    vbe_fill_rect(win->x, win->y, win->width, win->height,
+                  0xC0, 0xC0, 0xC0);
+    
+    /* Title bar */
+    vbe_fill_rect(win->x, win->y, win->width, 20,
+                  WINDOW_TITLE_R, WINDOW_TITLE_G, WINDOW_TITLE_B);
+    
+    /* Window title */
+    vbe_draw_string(win->title, win->x + 5, win->y + 4, 255, 255, 255);
+    
+    /* Close button */
+    vbe_fill_rect(win->x + win->width - 22, win->y + 2, 18, 16,
+                  0xE0, 0x60, 0x60);
+    vbe_draw_rect(win->x + win->width - 22, win->y + 2, 18, 16,
+                  0x80, 0x00, 0x00);
+    vbe_draw_string("X", win->x + win->width - 16, win->y + 5, 
+                    255, 255, 255);
+    
+    /* Window border */
+    vbe_draw_rect(win->x, win->y, win->width, win->height,
+                  0x80, 0x80, 0x80);
+    
+    /* Call application's draw callback */
+    if (win->draw_content) {
+        win->draw_content(win);
+    }
+}
+
+/* Handle click on GUI windows */
+static void gui_handle_app_window_click(int x, int y, int button) {
+    for (int i = num_gui_windows - 1; i >= 0; i--) {
+        gui_window_t* win = gui_windows[i];
+        if (win->visible) {
+            /* Check close button */
+            if (x >= win->x + (int)win->width - 22 && x <= win->x + (int)win->width - 4 &&
+                y >= win->y + 2 && y <= win->y + 18) {
+                gui_hide_window(win);
+                return;
+            }
+            
+            /* Call window's click handler */
+            if (win->handle_click) {
+                win->handle_click(win, x - win->x, y - win->y, button);
+            }
+            return;
+        }
+    }
 }

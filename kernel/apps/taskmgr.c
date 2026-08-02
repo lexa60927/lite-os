@@ -10,6 +10,7 @@
 #include "../gui/desktop.h"
 #include "../arch/i386/sched.h"
 #include "../memory/heap.h"
+#include "../drivers/vbe.h"
 
 /* Task Manager window state */
 static gui_window_t* taskmgr_window = NULL;
@@ -17,31 +18,20 @@ static int taskmgr_running = 0;
 
 /* Draw task manager window content */
 static void taskmgr_draw_content(gui_window_t* win) {
-    if (!win || !win->fb) return;
+    if (!win) return;
     
-    /* Clear window background */
-    uint32_t* fb = (uint32_t*)win->fb;
-    for (int y = 0; y < win->height; y++) {
-        for (int x = 0; x < win->width; x++) {
-            fb[y * win->width + x] = 0xC0C0C0;  /* Light gray background */
-        }
-    }
-    
-    /* Draw header */
-    gui_draw_rect(win->fb, win->width, win->height, 0, 0, win->width, 25, 0x000080);  /* Dark blue */
-    gui_draw_string(win->fb, win->width, "Task Manager", 10, 7, 0xFFFFFF);
+    /* Clear window background using VBE */
+    vbe_fill_rect(win->x, win->y + 20, win->width, win->height - 20, 0xC0, 0xC0, 0xC0);
     
     /* Draw process list header */
-    gui_draw_string(win->fb, win->width, "PID   State      Name", 10, 35, 0x000000);
-    gui_draw_line(win->fb, win->width, 10, 52, win->width - 10, 52, 0x808080);
+    vbe_draw_string("PID   State      Name", win->x + 10, win->y + 35, 0, 0, 0);
     
     /* List processes */
     char buffer[256];
-    int offset = 0;
     pcb_t* proc;
     int y_pos = 60;
     
-    for (int i = 0; i < MAX_PROCESSES && y_pos < win->height - 40; i++) {
+    for (int i = 0; i < MAX_PROCESSES && y_pos < (int)win->height - 40; i++) {
         proc = get_process(i);
         if (proc && proc->state != PROCESS_FREE) {
             const char* state_str;
@@ -52,28 +42,29 @@ static void taskmgr_draw_content(gui_window_t* win) {
                 default: state_str = "Unknown"; break;
             }
             
-            offset = snprintf(buffer, sizeof(buffer), "%-5d %-10s %s", 
-                             proc->pid, state_str, proc->name);
-            gui_draw_string(win->fb, win->width, buffer, 10, y_pos, 0x000000);
+            snprintf(buffer, sizeof(buffer), "%-5d %-10s %s", 
+                    proc->pid, state_str, proc->name);
+            vbe_draw_string(buffer, win->x + 10, win->y + y_pos, 0, 0, 0);
             y_pos += 18;
         }
     }
     
     /* Draw Kill button */
-    gui_draw_rect(win->fb, win->width, win->height, win->width - 90, win->height - 35, 80, 25, 0xFF0000);
-    gui_draw_string(win->fb, win->width, "Kill PID", win->width - 80, win->height - 28, 0xFFFFFF);
+    vbe_fill_rect(win->x + win->width - 90, win->y + win->height - 35, 80, 25, 0xFF, 0x00, 0x00);
+    vbe_draw_string("Kill PID", win->x + win->width - 80, win->y + win->height - 28, 255, 255, 255);
     
     /* Draw system info */
-    gui_draw_string(win->fb, win->width, "System Uptime:", 10, win->height - 30, 0x000000);
+    vbe_draw_string("System Uptime:", win->x + 10, win->y + win->height - 30, 0, 0, 0);
 }
 
 /* Handle mouse click in task manager */
-static void taskmgr_handle_click(int mx, int my) {
-    if (!taskmgr_window) return;
+static void taskmgr_handle_click(gui_window_t* win, int mx, int my, int button) {
+    (void)button;
+    if (!win) return;
     
     /* Check Kill button */
-    if (mx >= taskmgr_window->width - 90 && mx < taskmgr_window->width - 10 &&
-        my >= taskmgr_window->height - 35 && my < taskmgr_window->height - 10) {
+    if ((uint32_t)mx >= win->width - 90 && mx < (int)win->width - 10 &&
+        (uint32_t)my >= win->height - 35 && my < (int)win->height - 10) {
         /* Would need PID input in full implementation */
         kprintf("[TaskMgr] Kill button clicked\n");
     }

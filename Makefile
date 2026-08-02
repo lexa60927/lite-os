@@ -17,7 +17,7 @@ CFLAGS = -ffreestanding -nostdlib -fno-builtin -Wall -Wextra -m32 \
 ASFLAGS = -f elf32
 
 # Linker flags
-LDFLAGS = -m elf_i386 -nostdlib -T linker.ld
+LDFLAGS = -Wl,-m,elf_i386 -nostdlib -T linker.ld
 
 # Directories
 BOOT_DIR = boot

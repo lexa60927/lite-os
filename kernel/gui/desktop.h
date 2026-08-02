@@ -45,6 +45,22 @@ typedef struct {
     int draggable;
 } window_t;
 
+/* GUI Window with callbacks for applications */
+typedef struct gui_window {
+    int x;
+    int y;
+    uint32_t width;
+    uint32_t height;
+    char title[64];
+    int active;
+    int visible;
+    int draggable;
+    void (*draw_content)(struct gui_window* win);
+    void (*handle_click)(struct gui_window* win, int x, int y, int button);
+    void (*handle_key)(struct gui_window* win, char key);
+    void* user_data;
+} gui_window_t;
+
 /* Button structure */
 typedef struct {
     int x;
@@ -79,6 +95,13 @@ void gui_handle_click(int x, int y, int button);
 void gui_handle_move(int x, int y);
 int gui_is_running(void);
 void gui_create_default_windows(void);
+
+/* GUI Window management for applications */
+gui_window_t* gui_create_window(const char* title, int x, int y, uint32_t width, uint32_t height);
+void gui_destroy_window(gui_window_t* win);
+void gui_show_window(gui_window_t* win);
+void gui_hide_window(gui_window_t* win);
+void gui_redraw_window(gui_window_t* win);
 
 /* Global GUI state access */
 int gui_get_screen_width(void);
