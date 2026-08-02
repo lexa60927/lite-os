@@ -8,6 +8,7 @@
 #define _MOUSE_H
 
 #include <stdint.h>
+#include "../arch/i386/idt.h"
 
 /* Mouse event structure */
 typedef struct {

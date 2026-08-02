@@ -5,8 +5,7 @@
  */
 
 #include "sched.h"
-#include "../../include/stddef.h"
-#include "../drivers/vga.h"
+#include "../../drivers/vga.h"
 #include "gdt.h"
 #include "idt.h"
 

@@ -7,7 +7,9 @@
 #ifndef SCHED_H
 #define SCHED_H
 
-#include "../../include/stddef.h"
+#include <stdint.h>
+#include <stddef.h>
+#include "idt.h"
 
 /* Maximum number of processes */
 #define MAX_PROCESSES 64

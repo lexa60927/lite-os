@@ -5,10 +5,9 @@
  */
 
 #include "syscall.h"
-#include "../../include/stddef.h"
-#include "../drivers/vga.h"
+#include "../../drivers/vga.h"
 #include "sched.h"
-#include "../memory/heap.h"
+#include "../../memory/heap.h"
 
 /* System call numbers */
 #define SYS_YIELD       0

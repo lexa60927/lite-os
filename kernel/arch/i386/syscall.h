@@ -7,7 +7,8 @@
 #ifndef SYSCALL_H
 #define SYSCALL_H
 
-#include "../../include/stddef.h"
+#include <stdint.h>
+#include <stddef.h>
 
 /* System call handler function */
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx);

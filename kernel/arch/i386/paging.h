@@ -7,7 +7,8 @@
 #ifndef PAGING_H
 #define PAGING_H
 
-#include "../../include/stddef.h"
+#include <stdint.h>
+#include <stddef.h>
 
 /* CR0 flags */
 #define CR0_PE          0x00000001  /* Protection Enable */

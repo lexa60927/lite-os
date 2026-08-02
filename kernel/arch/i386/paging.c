@@ -5,8 +5,7 @@
  */
 
 #include "paging.h"
-#include "../../include/stddef.h"
-#include "../drivers/vga.h"
+#include "../../drivers/vga.h"
 
 /* Page directory and first page table */
 static uint32_t page_directory[1024] __attribute__((aligned(4096)));
