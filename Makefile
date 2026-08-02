@@ -3,8 +3,8 @@
 # Complete build system for x86 operating system kernel
 # =============================================================================
 
-# Cross-compiler toolchain (adjust if using different prefix)
-CC = i686-elf-gcc
+# Cross-compiler toolchain (use native gcc with -m32 if cross-compiler not available)
+CC = gcc
 AS = nasm
 OBJCOPY = objcopy
 
@@ -37,9 +37,21 @@ C_SOURCES = $(KERNEL_DIR)/kernel.c \
             $(KERNEL_DIR)/arch/i386/pic.c \
             $(KERNEL_DIR)/drivers/vga.c \
             $(KERNEL_DIR)/drivers/keyboard.c \
+            $(KERNEL_DIR)/drivers/vbe.c \
+            $(KERNEL_DIR)/drivers/mouse.c \
             $(KERNEL_DIR)/memory/pmm.c \
             $(KERNEL_DIR)/memory/heap.c \
-            $(KERNEL_DIR)/shell/shell.c
+            $(KERNEL_DIR)/shell/shell.c \
+            $(KERNEL_DIR)/gui/desktop.c \
+            $(KERNEL_DIR)/arch/i386/paging.c \
+            $(KERNEL_DIR)/arch/i386/sched.c \
+            $(KERNEL_DIR)/arch/i386/syscall.c \
+            $(KERNEL_DIR)/fs/vfs.c \
+            $(KERNEL_DIR)/fs/initrd.c \
+            $(KERNEL_DIR)/apps/taskmgr.c \
+            $(KERNEL_DIR)/apps/filemgr.c \
+            $(KERNEL_DIR)/apps/editor.c \
+            $(KERNEL_DIR)/apps/demos.c
 
 # Object files
 ASM_OBJECTS = $(BUILD_DIR)/boot.o \
@@ -52,9 +64,21 @@ C_OBJECTS = $(BUILD_DIR)/kernel.o \
             $(BUILD_DIR)/pic.o \
             $(BUILD_DIR)/vga.o \
             $(BUILD_DIR)/keyboard.o \
+            $(BUILD_DIR)/vbe.o \
+            $(BUILD_DIR)/mouse.o \
             $(BUILD_DIR)/pmm.o \
             $(BUILD_DIR)/heap.o \
-            $(BUILD_DIR)/shell.o
+            $(BUILD_DIR)/shell.o \
+            $(BUILD_DIR)/desktop.o \
+            $(BUILD_DIR)/paging.o \
+            $(BUILD_DIR)/sched.o \
+            $(BUILD_DIR)/syscall.o \
+            $(BUILD_DIR)/vfs.o \
+            $(BUILD_DIR)/initrd.o \
+            $(BUILD_DIR)/taskmgr.o \
+            $(BUILD_DIR)/filemgr.o \
+            $(BUILD_DIR)/editor.o \
+            $(BUILD_DIR)/demos.o
 
 # Output files
 KERNEL_BIN = $(BUILD_DIR)/kernel.bin
@@ -105,6 +129,36 @@ $(BUILD_DIR)/heap.o: $(KERNEL_DIR)/memory/heap.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/shell.o: $(KERNEL_DIR)/shell/shell.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/desktop.o: $(KERNEL_DIR)/gui/desktop.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/paging.o: $(KERNEL_DIR)/arch/i386/paging.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sched.o: $(KERNEL_DIR)/arch/i386/sched.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/syscall.o: $(KERNEL_DIR)/arch/i386/syscall.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vfs.o: $(KERNEL_DIR)/fs/vfs.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/initrd.o: $(KERNEL_DIR)/fs/initrd.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/taskmgr.o: $(KERNEL_DIR)/apps/taskmgr.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/filemgr.o: $(KERNEL_DIR)/apps/filemgr.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/editor.o: $(KERNEL_DIR)/apps/editor.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/demos.o: $(KERNEL_DIR)/apps/demos.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Link kernel ELF

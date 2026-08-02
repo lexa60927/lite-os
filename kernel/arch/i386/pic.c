@@ -5,7 +5,7 @@
  */
 
 #include "pic.h"
-#include "../io.h"
+#include "../../io.h"
 #include <stdint.h>
 
 /* Remap the PICs so IRQs 0-15 map to interrupts 32-47 */

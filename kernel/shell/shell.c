@@ -9,6 +9,7 @@
 #include "../drivers/keyboard.h"
 #include "../memory/pmm.h"
 #include "../memory/heap.h"
+#include "../gui/desktop.h"
 #include "../io.h"
 #include <stdint.h>
 
@@ -94,6 +95,8 @@ static void cmd_help(void) {
     kprintf("  echo     - Print text to screen\n");
     kprintf("  meminfo  - Show memory usage\n");
     kprintf("  reboot   - Reboot the system\n");
+    kprintf("  startx   - Launch graphical desktop environment\n");
+    kprintf("  win      - Alias for startx\n");
     kprintf("\n");
 }
 
@@ -144,6 +147,21 @@ static void cmd_reboot(void) {
     __asm__ volatile ("cli; hlt");
 }
 
+/* Command: startx / win - Launch GUI */
+static void cmd_startx(void) {
+    kprintf("Launching graphical environment...\n");
+    
+    /* Initialize and run GUI */
+    gui_init();
+    if (gui_is_running()) {
+        gui_run();
+    }
+    
+    /* GUI exited - reinitialize shell display */
+    kprintf("\nGUI session ended.\n");
+    kprintf("myos> ");
+}
+
 /* Unknown command handler */
 static void cmd_unknown(const char* cmd) {
     kprintf("Unknown command: %s\n", cmd);
@@ -177,6 +195,8 @@ static void process_command(char* cmd) {
         cmd_meminfo();
     } else if (strcmp(argv[0], "reboot") == 0) {
         cmd_reboot();
+    } else if (strcmp(argv[0], "startx") == 0 || strcmp(argv[0], "win") == 0) {
+        cmd_startx();
     } else {
         cmd_unknown(argv[0]);
     }

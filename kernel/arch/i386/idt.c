@@ -6,7 +6,7 @@
 
 #include "idt.h"
 #include "gdt.h"
-#include "../drivers/vga.h"
+#include "../../drivers/vga.h"
 #include <stdint.h>
 #include <string.h>
 

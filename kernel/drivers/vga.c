@@ -114,6 +114,9 @@ void kprint(const char* str) {
     }
 }
 
+/* Print a single character (helper for kprintf) */
+static void kprint_char(char c);
+
 /* Convert integer to string and print */
 static void kprint_int(int value, int base, int is_signed) {
     char buffer[32];
