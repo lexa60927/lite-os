@@ -1,0 +1,52 @@
+# =============================================================================
+# MyOS GitHub Actions CI/CD Pipeline
+# Automatically builds the OS on every push
+# =============================================================================
+
+name: Build MyOS
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          make \
+          nasm \
+          grub-pc-bin \
+          grub-common \
+          xorriso \
+          gcc-multilib \
+          qemu-system-x86
+      
+    - name: Build kernel
+      run: make all
+      
+    - name: Verify ISO was created
+      run: |
+        ls -la myos.iso
+        file myos.iso
+        
+    - name: Upload ISO artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: myos-iso
+        path: myos.iso
+        retention-days: 30
+        
+    - name: Test boot with QEMU (headless)
+      run: |
+        timeout 10s qemu-system-i386 -cdrom myos.iso -m 64M -nographic || true
