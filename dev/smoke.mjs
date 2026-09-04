@@ -14,6 +14,7 @@ console.error = (...a) => { errors.push(a.join(' ')); origError(...a); };
 process.on('unhandledRejection', (e) => errors.push('unhandledRejection: ' + (e?.stack ?? e)));
 
 const { boot } = await import('../src/main.js');
+const fireWin = (type, ev) => (dom.__winListeners[type] ?? []).forEach((fn) => fn({ preventDefault() {}, ...ev }));
 
 // --- подставный WebGL-рендерер ---
 let renders = 0;
@@ -39,7 +40,7 @@ const startP = game.start(42);
 await dom.__pumpFrames(900);
 await startP;
 const st = game.state;
-const p = game.player;
+let p = game.player;   // start() пересоздаёт игрока — перепривязываемся после каждой загрузки
 console.log(`✔ мир запущен: чанков ${st.world.chunkCount}, мешей ${game.chunkView.chunkMeshCount}, рендеров ${renders}`);
 console.log(`  спавн ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)} · на земле ${p.onGround} · HP ${st.hp}`);
 if (st.world.chunkCount < 20) throw new Error('слишком мало чанков после загрузки');
@@ -116,7 +117,6 @@ const burstOrig = game.particles.burst.bind(game.particles);
 game.particles.burst = (...a) => { burstOrig(...a); maxParticles = Math.max(maxParticles, game.particles.count); };
 await dom.__pumpFrames(120);
 game.particles.burst = burstOrig;
-const fireWin = (type, ev) => (dom.__winListeners[type] ?? []).forEach((fn) => fn({ preventDefault() {}, ...ev }));
 fireWin('mouseup', { button: 0 });
 if (game.input.mine !== 0) throw new Error('mouseup не остановил копку');
 console.log(`✔ добыча: правок ${editsBefore} → ${st.world.editedCount}`);
@@ -201,12 +201,24 @@ async function startWithPump(seed) {
   await game.start(seed);
   alive = false;
   await pump;
+  p = game.player;
 }
 game.toMenu();
 await startWithPump(42);
 await dom.__pumpFrames(150);
 console.log(`✔ перезагрузка: восстановлено правок ${game.state.world.editedCount} (сохранено ${savedEdits})`);
 if (game.state.world.editedCount !== savedEdits) throw new Error('правки не восстановились');
+
+// --- обзор без pointer lock (превью в iframe): удержание кнопки мыши ---
+p.pitch = 0; p.yaw = 0;
+game.input.mine = 0;
+dom.canvas.dispatch('mousedown', { button: 0, preventDefault() {} });
+fireWin('mousemove', { movementX: 120, movementY: -40 });
+await dom.__pumpFrames(3);
+fireWin('mouseup', { button: 0 });
+const dragOk = Math.abs(p.yaw) > 0.1 && Math.abs(p.pitch) > 0.01;
+console.log(`${dragOk ? '✔' : '✘'} обзор перетаскиванием (без pointer lock): yaw ${p.yaw.toFixed(3)}, pitch ${p.pitch.toFixed(3)}`);
+if (!dragOk) throw new Error('drag-look не работает');
 
 // --- текстовый сид ---
 game.toMenu();

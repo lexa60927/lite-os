@@ -64,7 +64,7 @@ export class Game {
       running: false, paused: false, loading: false, hudHidden: false,
       time: 0.28, seed: DEFAULT_SEED, world: null,
       hotbar: HOTBAR_DEFAULT.map((k) => BLOCKS.find((b) => b.key === k)?.id ?? 0),
-      sel: 0, breakProgress: 0, breakTarget: null, lastHit: null,
+      sel: 0, breakProgress: 0, breakTarget: null, lastHit: null, dragging: false,
       hp: 20, regenT: 0, saveT: 0, placeCd: 0, stepT: 0, fps: 0, ms: 0,
       acc: 0, flyTapT: 0, sprintTapT: 0,
     };
@@ -319,11 +319,13 @@ export class Game {
       if (e.button === 0) this.input.mine = 1;
       if (e.button === 2) this.input.place = 1;
       if (e.button === 1) this.pickBlock();
+      this.state.dragging = true;
       this.audio.resume();
     });
     addEventListener('mouseup', (e) => {
       if (e.button === 0) { this.input.mine = 0; this.state.breakProgress = 0; this.target.setBreakProgress(0); }
       if (e.button === 2) this.input.place = 0;
+      this.state.dragging = false;
     });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     addEventListener('wheel', (e) => {
@@ -331,10 +333,12 @@ export class Game {
       this.selectSlot((this.state.sel + (e.deltaY > 0 ? 1 : -1) + 9) % 9);
     }, { passive: true });
     addEventListener('mousemove', (e) => {
-      if (!this.state.running || document.pointerLockElement !== canvas) return;
-      const s = 0.0022 * this.settings.sensitivity;
-      this.input.lookX += e.movementX * s;
-      this.input.lookY -= e.movementY * s;
+      if (!this.state.running || this.state.paused || this.inventoryOpen) return;
+      const locked = document.pointerLockElement === canvas;
+      if (!locked && !this.state.dragging) return;
+      const s = 0.0022 * this.settings.sensitivity * (locked ? 1 : 1.25);
+      this.input.lookX += (e.movementX ?? 0) * s;
+      this.input.lookY -= (e.movementY ?? 0) * s;
     });
     document.addEventListener('pointerlockchange', () => {
       if (!document.pointerLockElement && this.state.running && !this.state.paused && !this.inventoryOpen) this.pause();
@@ -485,7 +489,13 @@ export class Game {
   lockPointer() {
     if (this.settings.touch) return;      // на тач-устройстве без указателя
     if (matchMedia('(hover: none)').matches && !this.settings.touch) return;
-    this.canvas.requestPointerLock?.();
+    if (document.pointerLockElement === this.canvas) return;
+    try {
+      // во встроенном превью pointer lock часто запрещён — тогда не роняем игру,
+      // обзор остаётся перетаскиванием кнопки мыши
+      const r = this.canvas.requestPointerLock?.();
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch { /* ignore */ }
   }
 
   /** Если игрок внутри блоков — найти свободную клетку над ним. */
@@ -739,7 +749,7 @@ export class Game {
     // действия
     this.mineTick(dt);
     st.placeCd -= dt;
-    if (input.place && st.placeCd <= 0) { this.tryPlace(); st.placeCd = this.input.placeHeld ? 0.16 : 0.22; }
+    if (input.place && st.placeCd <= 0) { this.tryPlace(); st.placeCd = 0.2; }
 
     // мир
     this.chunkView.update(this.player);
