@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1b2126" />
+  <title>LiteCraft — воксельный мир</title>
+</head>
+<body>
+  <div id="app">
+    <canvas id="gl"></canvas>
+
+    <div id="hud" class="hidden">
+      <div id="crosshair"></div>
+      <div id="water-tint"></div>
+      <div id="vignette"></div>
+      <div id="hp"></div>
+      <div id="blockname"></div>
+      <div id="hotbar"></div>
+      <div id="debug" class="panel"></div>
+      <div id="toasts"></div>
+      <div id="touch-ui" class="hidden">
+        <div id="stick"><div id="stick-knob"></div></div>
+        <div class="tbtns">
+          <button id="t-jump" class="tbtn">⤒</button>
+          <button id="t-sneak" class="tbtn">⤓</button>
+          <button id="t-fly" class="tbtn">✈</button>
+          <button id="t-mine" class="tbtn">⛏</button>
+          <button id="t-place" class="tbtn">▣</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="loading" class="screen hidden">
+      <div class="panel box">
+        <h2>Генерация мира…</h2>
+        <div class="bar"><i id="load-fill"></i></div>
+        <div id="load-text" class="muted"></div>
+      </div>
+    </div>
+
+    <div id="menu" class="screen">
+      <div class="panel box main-menu">
+        <h1 class="title">Lite<span>Craft</span></h1>
+        <p class="tagline">трёхмерный воксельный мир прямо в браузере</p>
+        <div class="row">
+          <label class="field">
+            <span>Сид мира</span>
+            <input id="seed" type="text" placeholder="например, 42 или «крипер»" autocomplete="off" />
+          </label>
+          <button id="rnd-seed" class="btn ghost" title="Случайный сид">🎲</button>
+        </div>
+        <div class="row buttons">
+          <button id="play" class="btn primary">Играть</button>
+          <button id="open-settings" class="btn ghost">Настройки</button>
+        </div>
+        <div id="worlds" class="worlds"></div>
+        <details class="controls">
+          <summary>Управление</summary>
+          <div id="controls-list" class="keys"></div>
+        </details>
+      </div>
+    </div>
+
+    <div id="pause" class="screen hidden">
+      <div class="panel box">
+        <h2>Пауза</h2>
+        <div class="row buttons">
+          <button id="resume" class="btn primary">Продолжить</button>
+          <button id="save-now" class="btn ghost">Сохранить</button>
+        </div>
+        <div class="row buttons">
+          <button id="pause-settings" class="btn ghost">Настройки</button>
+          <button id="pause-quit" class="btn ghost danger">В главное меню</button>
+        </div>
+        <div id="pause-stats" class="muted small"></div>
+      </div>
+    </div>
+
+    <div id="settings" class="screen hidden">
+      <div class="panel box">
+        <h2>Настройки</h2>
+        <div id="settings-body"></div>
+        <div class="row buttons">
+          <button id="settings-close" class="btn primary">Готово</button>
+        </div>
+        <p class="muted small">Настройки сохраняются в этом браузере.</p>
+      </div>
+    </div>
+
+    <div id="inventory" class="screen hidden">
+      <div class="panel box wide">
+        <h2>Инвентарь <span class="muted small">клик — поставить блок в выбранный слот · E / Esc — закрыть</span></h2>
+        <div id="inv-grid" class="inv-grid"></div>
+        <div class="row inv-slots">
+          <div class="muted small">Слот для назначения:</div>
+          <div id="inv-hotbar" class="hotbar compact"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Покажем ошибку запуска прямо на экране вместо пустого холста.
+    window.__litecraftError = function (msg) {
+      var box = document.createElement('pre');
+      box.style.cssText = 'position:fixed;inset:auto 12px 12px 12px;max-height:45vh;overflow:auto;background:#2b0e0e;color:#ffd9d3;padding:14px;font:12px/1.5 ui-monospace,monospace;border:1px solid #612;border-radius:4px;z-index:9999;white-space:pre-wrap';
+      box.textContent = msg;
+      document.body.appendChild(box);
+    };
+    window.addEventListener('error', function (e) {
+      if (e.message && /ResizeObserver|WebGL context/i.test(e.message)) return;
+      window.__litecraftError('Ошибка: ' + e.message + (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      window.__litecraftError('Ошибка (promise): ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+    });
+  </script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
