@@ -1048,7 +1048,7 @@ export class Game {
       `LiteCraft · ${this.state.fps.toFixed(0)} FPS · ${this.state.ms.toFixed(1)} мс`,
       `XYZ ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}  чанк ${cx},${cz}  блок ${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`,
       `биом: ${biome}  ·  время ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}  ·  свет ${(sky.day * 15) | 0}/15`,
-      `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount} · стриминг ${cv?.stats.ms?.toFixed(1) ?? 0} мс/кадр (${cv?.stats.frameMs?.toFixed(1) ?? '—'} мс кадр)${this.inVillage ? ' · деревня' : ''}`,
+      `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount} · стриминг ${cv?.stats.ms?.toFixed(1) ?? 0} мс/кадр (${cv?.stats.frameMs?.toFixed(1) ?? '—'} мс кадр)${(() => { const d = cv?.streamDebug?.(); return d && (d.genErr || d.meshErr || d.light > 64) ? ` · сбой: ген ${d.genErr}, меш ${d.meshErr}, свет ${d.light}` : ''; })()}${this.inVillage ? ' · деревня' : ''}`,
       `режим: ${p.flying ? 'полёт' : p.sprinting ? 'бег' : 'ходок'} · HP ${this.state.hp / 2} · ${this.inv.creative ? 'творчество' : 'выживание'} · сид ${this.state.seed}`,
       `мобов вокруг: ${this.mobs.count} (видно ${this.mobs.nearCount(p, 48)}) · убито: ${this.mobs.kills} · в руке: ${BLOCKS[this.inv.hot[this.inv.sel]]?.name ?? '—'} ×${this.inv.creative ? '∞' : this.inv.hotN[this.inv.sel]}`,
       `${p.headInWater ? 'под водой' : p.inWater ? 'в воде' : 'на суше'}${p.onGround ? ' · на земле' : ''} · E — инвентарь, F3 — вкл/выкл панели`,

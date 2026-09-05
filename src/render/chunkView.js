@@ -7,7 +7,36 @@ import { CHUNK, HEIGHT, chunkKey, decodeChunkKey } from '../engine/constants.js'
 
 const neighborsReady = (world, cx, cz) => !!world.getChunk(cx + 1, cz) && !!world.getChunk(cx - 1, cz)
   && !!world.getChunk(cx, cz + 1) && !!world.getChunk(cx, cz - 1);
+
+// Непroteцный пол бюджета стриминга (мс на кадр). Раньше при просадке fps пул
+// умножался на 0.4 и генерация получала 0.4*0.15 ≈ 0.36 мс — это ~4 чанка в
+// секунду, а игрок на спринте влетает в 5–6 новых чанков в секунду. Отсюда и
+// «идёшь — впереди пустота»: очередь не разгребалась никогда. Лучше чуть
+// подтормаживающий кадр, чем прозрачный мир, поэтому below this line work wins.
+const POOL_MIN = 3.4;
+const STREAM_BURST = 16;   // мс на кадр, пока очередь глубже 60 чанков
+const GEN_MIN = 1.2;      // мс, которые генерация получает всегда
 import { buildChunkMesh } from '../engine/mesher.js';
+
+/**
+ * План работы стриминга на кадр. Вынесено из update(), чтобы политику можно
+ * было проверить без браузера: именно она решает, увидит ли игрок пустые чанки.
+ *
+ *   frameMs — сглаженное время кадра, backlog — сколько чанков ждёт меша.
+ *
+ * Глубокая очередь (сразу после спавна, после смены радиуса, после телепорта)
+ * — особый случай: здесь тормозить контрпродуктивно, мир пока пустой, и
+ * игрок всё равно никуда не смотрит, кроме дыр. Поэтому бюджет наоборот
+ * расширяется, а не режется.
+ */
+export function streamPlan(frameMs, backlog, budget = 6) {
+  const deep = backlog > 60;
+  let pool = budget;
+  if (deep) pool = STREAM_BURST;
+  else if (frameMs > 20 && backlog < 32) pool = pool * 0.4;
+  else if (frameMs < 13 && backlog > 8) pool = budget * 1.4;
+  return { pool: Math.max(POOL_MIN, pool), gen: deep ? 0.8 : backlog > 24 ? 0.35 : 0.5 };
+}
 
 export class ChunkView {
   constructor(world, scene, materials, atlas) {
@@ -31,6 +60,14 @@ export class ChunkView {
 
   setRenderDistance(r) { this.renderDistance = Math.max(2, Math.min(16, r | 0)); }
 
+  /** Состояние конвейера для отладочной строки: дыры в мире должны быть видны,
+   *  а не прятаться в консоли (оверлей Vite выключен намеренно). */
+  streamDebug() {
+    const w = this.world;
+    return { gen: this.stats.gen, mesh: this.stats.mesh, pending: w.dirtyMesh.size,
+      light: w.dirtyLight.size, genErr: this._genErrCount ?? 0, meshErr: this._meshErrCount ?? 0 };
+  }
+
   /** Обновить потоковую загрузку; вызывать каждый кадр. */
   update(playerPos) {
     const world = this.world;
@@ -53,13 +90,13 @@ export class ChunkView {
       this._frameMs += (ft - this._frameMs) * 0.15;
     }
     this._last = now;
-    let pool = this.streamBudget;
-    if (this._frameMs > 20) pool *= 0.4;
-    else if (this._frameMs < 13 && backlog > 8) pool *= 1.4;
+    const plan = streamPlan(this._frameMs, backlog, this.streamBudget);
+    const pool = plan.pool;
     const deadline = now + pool;
     // пока очередь меширования длинная, генерация уступает ей время (иначе
-    // новые чанки приходят быстрее, чем успевают стать геометрией)
-    const genEnd = now + pool * (backlog > 24 ? 0.15 : 0.5);
+    // новые чанки приходят быстрее, чем успевают стать геометрией), но не
+    // меньше GEN_MIN — иначе мир вообще перестаёт расти
+    const genEnd = now + Math.max(GEN_MIN, pool * plan.gen);
     let gen = 0;
     // 1. генерация кольцами от «фокуса» (на один дальше, чем радиус меширования)
     outer:
@@ -79,6 +116,7 @@ export class ChunkView {
             try {
               world.ensureChunk(cx, cz);
             } catch (e) {
+              this._genErrCount = (this._genErrCount ?? 0) + 1;
               if (!this._genErr) { this._genErr = 1; console.error('чанк не сгенерирован:', cx, cz, e); }
               continue;
             }
@@ -123,6 +161,7 @@ export class ChunkView {
       try {
         this.remesh(cx, cz);
       } catch (e) {
+        this._meshErrCount = (this._meshErrCount ?? 0) + 1;
         if (!this._meshErr) { this._meshErr = 1; console.error('меширование чанка не удалось:', cx, cz, e); }
       }
       world.dirtyMesh.delete(ChunkView.key(cx, cz));

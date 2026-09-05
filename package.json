@@ -14,6 +14,8 @@
     "test:shaders": "node dev/test-shaders.cjs",
     "test:api": "node --experimental-loader ./dev/loaders/css.mjs dev/test-api.mjs",
     "test:calm": "node dev/test-calm.mjs",
+    "test:uv": "node dev/test-uv.mjs",
+    "test:stream": "node dev/test-stream.mjs",
     "test:villages": "node --experimental-loader ./dev/loaders/css.mjs dev/test-villages.mjs",
     "bench:mesh": "node dev/bench-mesh.mjs"
   },
