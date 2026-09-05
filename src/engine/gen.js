@@ -532,10 +532,17 @@ export class Terrain {
         const forest = bcol === BIOME.FOREST || bcol === BIOME.SWAMP;
         const savanna = bcol === BIOME.SAVANNA;
         if (h + 1 > hmax) hmax = h + 1;
-        if (r < (forest ? 0.22 : savanna ? 0.3 : 0.13)) blocks[above] = B.tall_grass;
-        else if (r < (forest ? 0.28 : 0.16)) blocks[above] = B.fern;
-        else if (r > 0.955) blocks[above] = B.flower_red;
-        else if (r > 0.935) blocks[above] = B.flower_yellow;
+        // Куртины: трава растёт пятнами, а не равномерным «конфетти» по всей
+        // площади. Раньше в саванне травинка была на 30% клеток — луг читался
+        // полем зелёных штырьков, и это выглядело как «сломанные текстуры».
+        const cl = hash2(x >> 2, z >> 2, (this.seed + 0x5c31) >>> 0);
+        const patch = cl > 0.72 ? 0.2 : cl > 0.46 ? 0.55 : 1.2;
+        const tuft = (forest ? 0.12 : savanna ? 0.075 : 0.06) * patch;
+        const toFern = tuft + (forest ? 0.05 : 0.028) * patch;
+        if (r < tuft) blocks[above] = B.tall_grass;
+        else if (r < toFern) blocks[above] = B.fern;
+        else if (r > 0.968) blocks[above] = B.flower_red;
+        else if (r > 0.95) blocks[above] = B.flower_yellow;
       }
     }
     chunk.hmax = Math.min(HEIGHT - 1, hmax);
@@ -544,4 +551,14 @@ export class Terrain {
 }
 
 /** Доля блока, занятая рудой внутри подходящей ячейки. */
+/**
+ * Есть ли рядом деревня. Отдельная функция (а не метод Terrain), чтобы не падать,
+ * если после HMR в браузере мир ещё носит старый экземпляр без нового метода:
+ * «terrain.villageAt is not a function» в промисе ронял игру на пустом месте.
+ */
+export function villageNear(world, x, z) {
+  const t = world?.terrain;
+  return typeof t?.villageAt === 'function' ? !!t.villageAt(Math.floor(x), Math.floor(z)) : false;
+}
+
 export const ORE_FILL = { [B.coal]: 0.42, [B.iron]: 0.34, [B.gold]: 0.26, [B.diamond]: 0.22, [B.redstone]: 0.32 };

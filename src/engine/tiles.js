@@ -49,30 +49,29 @@ function t(fn) {
 
 /** Каменная основа для руд и булыжника: мягкое поле + редкие точки. */
 function stoneBase(tl, seed = 0) {
-  return tl.soft(C.stone, 7 + seed, 7, 5).grain(4, 8 + seed).speckles('#7c7c7c', 9, 21 + seed, 7);
+  return tl.mottle(C.stone, 7 + seed, 5, 1.4, 3.0, 2.4).speckles('#7c7c7c', 4, 21 + seed, 6);
 }
 
 /** Кромка травы: земля + зелёная бахрома сверху с зубцами (как в Minecraft). */
 function grassFringe(tile, seed, topPalette, dirtPalette, base = 3, jitter = 3) {
-  tile.soft(dirtPalette, seed, 8, 4).grain(4, seed + 1);
+  tile.mottle(dirtPalette, seed, 5, 1.3, 2.8, 2.2);
   tile.pebbles('#6f4f33', 5, seed + 5, 2, 8, -10);
   for (let x = 0; x < 16; x++) {
-    const h = base + ((hash2(x, 1, seed) * jitter) | 0);
-    for (let y = 0; y < h; y++) {
-      tile.set(x, y, topPalette[(hash2(x, y, seed + 3) * topPalette.length) | 0]);
-    }
-    // тёмный пиксель под бахромой — читается как граница дёрна
-    if (hash2(x, 5, seed + 8) > 0.35) tile.set(x, h, C.grassDark[(hash2(x, 6, seed) * 2) | 0]);
+    // зубцы по 2px и цвет пятнами: попиксельный перебор превращал кромку дёрна
+    // в шум — сверху блок травы выглядел «рябым»
+    const h = base + ((hash2((x / 2) | 0, 1, seed) * jitter) | 0);
+    for (let y = 0; y < h; y++) tile.set(x, y, topPalette[(hash2((x / 2) | 0, (y / 2) | 0, seed + 3) * topPalette.length) | 0]);
+    if (hash2(x, 5, seed + 8) > 0.35) tile.set(x, h, C.grassDark[(hash2((x / 2) | 0, 6, seed) * 2) | 0]);
   }
   return tile;
 }
 
 const painters = {
-  grass_top: (tl) => tl.soft(C.grass, 11, 9, 4).grain(5, 13).speckles('#458c28', 10, 12, 9).speckles('#74c44c', 7, 14, 9),
+  grass_top: (tl) => tl.mottle(C.grass, 11, 5, 1.6, 3.4, 1.8),
   grass_side: (tl) => grassFringe(tl, 21, C.grass, C.dirt, 3, 3),
   podzol_side: (tl) => grassFringe(tl, 62, C.podzol, C.dirt, 2, 2),
-  dirt: (tl) => tl.soft(C.dirt, 3, 8, 4).grain(4, 4).pebbles('#6f4f33', 6, 5, 2, 8, -12).speckles('#9c7a56', 6, 6, 8),
-  podzol: (tl) => { tl.soft(C.podzol, 61, 8, 4).grain(4, 62); for (let x = 0; x < 16; x++) if (x % 3) tl.set(x, 0, C.grassDark[(hash2(x, 1, 63) * 2) | 0]); return tl; },
+  dirt: (tl) => tl.mottle(C.dirt, 3, 5, 1.3, 2.8, 2.4).pebbles('#6f4f33', 5, 5, 2, 8, -12),
+  podzol: (tl) => { tl.mottle(C.podzol, 61, 5, 1.4, 3.0, 2.2); for (let x = 0; x < 16; x++) if (x % 3) tl.set(x, 0, C.grassDark[(hash2(x, 1, 63) * 2) | 0]); return tl; },
   stone: (tl) => stoneBase(tl),
   cobblestone: (tl) => {
     tl.fill('#616161');                     // раствор между камнями
@@ -103,9 +102,9 @@ const painters = {
     }
     return tl;
   },
-  sand: (tl) => tl.fill('#e0cfa1').grain(7, 18).speckles('#cdbb8c', 10, 19, 8).speckles('#eee0b6', 8, 20, 6),
+  sand: (tl) => tl.mottle(C.sand, 18, 4, 1.8, 3.6, 1.5),
   sandstone_side: (tl) => {
-    tl.soft(C.sandstone, 23, 5, 5).grain(3, 24);
+    tl.mottle(C.sandstone, 23, 4, 1.8, 3.6, 1.6);
     for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
       if (y === 0 || y === 15) tl.set(x, y, '#c2b078');
       else if (y === 7 || y === 8) tl.set(x, y, '#cbb983');
@@ -114,7 +113,7 @@ const painters = {
   },
   sandstone_top: (tl) => tl.fill('#dbcb94').grain(5, 30).border('#c2b078'),
   gravel: (tl) => {
-    tl.soft(C.gravel, 37, 5, 4);
+    tl.mottle(C.gravel, 37, 4, 1.6, 3.2, 1.6);
     for (let i = 0; i < 15; i++) {
       const x = (hash2(i, 3, 41) * 15) | 0, y = (hash2(i, 7, 42) * 15) | 0;
       const w = 1 + ((hash2(i, 11, 43) * 2) | 0), h = 1 + ((hash2(i, 13, 44) * 2) | 0);
@@ -150,23 +149,25 @@ const painters = {
     return tl;
   },
   leaves: (tl) => {
+    // Крупные кластеры вместо попиксельного перебора: 5 оттенков зелёного на
+    // каждом пикселе давали «рябь» и на дистанции превращали крону в шум.
     tl.clear();
-    for (let y = 0; y < 16; y++) {
-      for (let x = 0; x < 16; x++) {
-        const f = hash2((x / 3) | 0, (y / 3) | 0, 66);   // кластеры листвы
-        const r = hash2(x, y, 67);
-        if (r > 0.91) continue;                          // редкие дырки для cutout
-        const c = C.leaves[((f * 0.65 + r * 0.35) * C.leaves.length) | 0];
-        tl.set(x, y, tint(c, (r - 0.5) * 8), 255);
-      }
+    tl.mottle(C.leaves, 66, 5, 1.6, 3.4, 2.0);
+    tl.blobs('#316920', 5, 81, 2.3);
+    tl.blobs('#57a238', 3, 97, 1.7);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const edge = x === 0 || y === 0 || x === 15 || y === 15;
+      if (edge ? hash2(x, y, 67) > 0.55 : hash2(x, y, 68) > 0.972) tl.set(x, y, [0, 0, 0], 0);
     }
     return tl;
   },
   planks: (tl) => {
-    tl.soft(C.planks, 71, 5, 6).grain(3, 72);
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      if (y % 4 === 3) tl.set(x, y, '#8a6a35');
-      else if (hash2(x * 3, y, 73) > 0.9) tl.set(x, y, '#c69a61');
+    tl.mottle([C.planks[0], C.planks[1]], 71, 4, 2.2, 4.2, 1.6);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (y % 4 === 3) tl.set(x, y, '#8a6a35');
+    for (let i = 0; i < 6; i++) {                    // волокно: короткие полосы, не точки
+      const y = (hash2(i, 3, 73) * 16) | 0, x = (hash2(i, 5, 74) * 12) | 0, w = 2 + ((hash2(i, 7, 75) * 3) | 0);
+      if (y % 4 === 3) continue;
+      for (let k = 0; k < w; k++) tl.set(x + k, y, '#c69a61');
     }
     for (const x of [5, 12]) for (let y = 0; y < 16; y++) if (y % 4 !== 3) tl.set(x, y, '#9c7640');
     return tl;
@@ -189,7 +190,7 @@ const painters = {
     return tl;
   },
   bedrock: (tl) => tl.soft(C.bedrock, 83, 10, 3).grain(5, 84).pebbles('#262626', 8, 89, 2, -10, 12),
-  snow: (tl) => tl.fill('#f2faff').grain(5, 98).speckles('#dbeefb', 7, 101, 5),
+  snow: (tl) => tl.mottle(C.snow, 98, 4, 1.8, 3.4, 1.2),
   coal_ore: (tl) => { stoneBase(tl, 1); return tl.pebbles('#242424', 4, 103, 2, -6, -22); },
   iron_ore: (tl) => { stoneBase(tl, 2); return tl.pebbles('#c9915f', 4, 107, 2, 18, -16); },
   gold_ore: (tl) => { stoneBase(tl, 3); return tl.pebbles('#f5d33c', 4, 109, 2, 20, -16); },
@@ -228,9 +229,9 @@ const painters = {
       for (let s = 0; s < h; s++) {
         const y = 15 - s;
         const x = Math.round(bx + (lean * s) / h);
-        const col = s > h - 3 ? '#7ac44a' : s > h * 0.5 ? '#5aa832' : '#3f7d24';
+        const col = s > h - 3 ? '#6ba83f' : s > h * 0.5 ? '#4f8b2d' : '#386a20';
         tl.set(x, y, col);
-        if (s % 3 === 0) tl.set(x + 1, y, '#4a9427');
+        if (s % 5 === 0) tl.set(x + 1, y, '#417a29');
       }
     }
     return tl;

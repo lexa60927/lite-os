@@ -18,6 +18,8 @@ export const FULL_BRIGHT = new Uint8Array(n);
 export const REPLACEABLE = new Uint8Array(n);
 export const LIGHT = new Float32Array(n);
 export const INSET = new Float32Array(n);
+/** Высота крестовины (травинки, цветы, пшеница): 0.42…0.75 вместо целого блока. */
+export const PLANT_H = new Float32Array(n);
 export const ITEM = new Uint8Array(n);
 /** Блок берёт цвет из BIOME_TINT (трава, листва, растения). */
 export const TINTED = new Uint8Array(n);
@@ -34,6 +36,7 @@ for (let i = 0; i < n; i++) {
   REPLACEABLE[i] = f(i, def, 'replaceable');
   LIGHT[i] = def.light || 0;
   INSET[i] = def.inset || 0;
+  PLANT_H[i] = def.render === 'cross' ? (def.plantH ?? 0.62) : 1;
   ITEM[i] = def.render === 'item' ? 1 : 0;
   TINTED[i] = def.tinted ? 1 : 0;
   WATER_TINT[i] = def.liquid ? 1 : 0;

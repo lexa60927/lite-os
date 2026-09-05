@@ -9,7 +9,7 @@ import { CHUNK, HEIGHT, idx } from './constants.js';
 
 const SEA_TOP = 38;              // вода/болотная вода живут ниже этого — не режем
 import { BLOCKS } from './blocks.js';
-import { OPAQUE, RENDER, HIDE_SAME, CUTOUT, FULL_BRIGHT, LIGHT, INSET, TINTED, WATER_TINT, R_CUBE, R_LIQUID, R_CROSS, R_TORCH } from './props.js';
+import { OPAQUE, RENDER, HIDE_SAME, CUTOUT, FULL_BRIGHT, LIGHT, INSET, TINTED, WATER_TINT, PLANT_H, R_CUBE, R_LIQUID, R_CROSS, R_TORCH } from './props.js';
 import { BIOME_TINT, BIOME_WATER_TINT } from './gen.js';
 
 export const F_TOP = 0, F_BOTTOM = 1;
@@ -239,8 +239,11 @@ export function buildChunkMesh(world, chunk, atlas) {
             solid.push([[lx + A, ly + T, lz + B], [lx + B, ly + T, lz + B], [lx + B, ly + T, lz + A], [lx + A, ly + T, lz + A]], [uv0, uv1, uv2, uv3], lights);
           } else {
             const c = 0.146, d = 0.854;
-            solid.push([[lx + c, ly, lz + c], [lx + c, ly + 1, lz + c], [lx + d, ly + 1, lz + d], [lx + d, ly, lz + d]], uvs, lights);
-            solid.push([[lx + d, ly, lz + c], [lx + d, ly + 1, lz + c], [lx + c, ly + 1, lz + d], [lx + c, ly, lz + d]], uvs, lights);
+            // трава и цветы — не на всю высоту блока: иначе луг выглядит полем
+            // штырьков, а в саванне таких клеток 30% и трава «светится»
+            const ph = PLANT_H[id] > 0 ? PLANT_H[id] : 1;
+            solid.push([[lx + c, ly, lz + c], [lx + c, ly + ph, lz + c], [lx + d, ly + ph, lz + d], [lx + d, ly, lz + d]], uvs, lights);
+            solid.push([[lx + d, ly, lz + c], [lx + d, ly + ph, lz + c], [lx + c, ly + ph, lz + d], [lx + c, ly, lz + d]], uvs, lights);
           }
           continue;
         }

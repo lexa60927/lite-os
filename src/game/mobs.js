@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { FACES, QuadBuffer, tileRect } from '../engine/mesher.js';
 import { byKey, isLiquid as liquidBlock } from '../engine/blocks.js';
+import { villageNear } from '../engine/gen.js';
 
 /** parts: p — центр относительно центра модели, s — размер, limb — качается. */
 export const MOB_TYPES = {
@@ -270,7 +271,7 @@ export class Mobs {
       const y = ground + 1;
       const sky = world.skyAt(x, y, z);
       const light = Math.max(sky * 15 * (night ? 0.22 : 1), world.lightAt(x, y, z) * 15);
-      const inVillage = !!world.terrain.villageAt(x, z);
+      const inVillage = villageNear(world, x, z);
       const ok = keys.filter((k) => this.#allowed(MOB_TYPES[k], night, light, y, inVillage));
       if (!ok.length) continue;
       const type = ok[(this.rng() * ok.length) | 0];

@@ -19,7 +19,7 @@ import { CHUNK, HEIGHT, blockKey } from './engine/constants.js';
 import { DEFAULT_SEED } from './engine/gen.js';
 import { seedFromString } from './engine/noise.js';
 import { mesherFlags } from './engine/mesher.js';
-import { BIOME_NAMES } from './engine/gen.js';
+import { BIOME_NAMES, villageNear } from './engine/gen.js';
 
 import { Player } from './game/player.js';
 import { raycast } from './game/raycast.js';
@@ -977,7 +977,7 @@ export class Game {
     if (this.villageT <= 0) {
       this.villageT = 1.2;
       const pl = this.player;
-      const here = !!pl && !!this.state.world?.terrain.villageAt(Math.floor(pl.x), Math.floor(pl.z));
+      const here = !!pl && villageNear(this.state.world, pl.x, pl.z);
       if (here !== this.inVillage) {
         this.inVillage = here;
         if (here) this.hud.toast('Деревня: здесь светло, враги не спавнятся. Жители носят изумруды', '');

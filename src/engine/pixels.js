@@ -140,6 +140,34 @@ export class PixelTile {
   }
 
   /** Мягкие «пятна» (камни, рудные вкрапления). */
+  /**
+   * Пятнистая основа: irregular-кластеры 2-4px вместо интерполяции по сетке.
+   * soft() считает значение по узлам решётки (cell) — на 16px-тайле это даёт
+   * заметную диагональную решётку/«царапины», которые читаются как битая текстура.
+   */
+  mottle(colors, seed = 0, perColor = 5, minR = 1.5, maxR = 3.4, grain = 2.5) {
+    this.fill(colors[0]);
+    for (let i = 1; i < colors.length; i++) {
+      for (let k = 0; k < perColor; k++) {
+        const sd = (seed + i * 97 + k * 13) >>> 0;
+        const cx = hash2(i * 7 + k, k * 31 + i, sd) * TILE;
+        const cy = hash2(k * 17 + i, i * 13 + k, sd + 5) * TILE;
+        const rad = minR + hash2(i, k, sd + 9) * (maxR - minR);
+        for (let y = Math.floor(cy - rad); y <= cy + rad; y++) {
+          for (let x = Math.floor(cx - rad); x <= cx + rad; x++) {
+            const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > rad * rad) continue;
+            if (d2 < (rad - 0.7) ** 2 && hash2(x * 5 + i, y * 3 + k, sd + 21) > 0.8) continue;
+            this.set(((x % TILE) + TILE) % TILE, ((y % TILE) + TILE) % TILE, colors[i]);
+          }
+        }
+      }
+    }
+    if (grain) this.grain(grain, seed + 1009);
+    return this;
+  }
+
   blobs(color, count, seed = 0, size = 2.6) {
     for (let i = 0; i < count; i++) {
       const cx = hash2(i * 5 + 3, i * 11 + 7, seed) * TILE;
