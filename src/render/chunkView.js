@@ -45,7 +45,7 @@ export class ChunkView {
     const az = Math.max(-2, Math.min(2, Math.round((vz * 1.1) / CHUNK)));
     const fcx = pcx + ax, fcz = pcz + az;
     const backlog = world.dirtyMesh.size;
-    // Сглаженное время кадра: если мы и так не успеваем —工作 не раздуваем, а
+    // Сглаженное время кадра: если мы и так не успеваем — работу не раздуваем, а
     // ужимаем; если в кадре есть запас и очередь большая — догоняем.
     const now = performance.now();
     if (this._last) {
