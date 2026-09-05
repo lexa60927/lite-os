@@ -275,6 +275,18 @@ export class ChunkView {
     }
   }
 
+  /**
+   * Убрать все меши этого вида из сцены. Нужно при смене мира (новый сид,
+   * заход в сеть): конструктор нового ChunkView старого не знает, и без этого
+   * вызова ~120 мешей прошлого мира так и висели бы в сцене вторым слоем.
+   */
+  dispose() {
+    for (const [k, obj] of [...this.objects]) {
+      this.disposeObject(obj);
+      this.objects.delete(k);
+    }
+  }
+
   /** Полная перестройка (например после изменения атласа/настройки). */
   rebuildAll() {
     for (const k of this.world.chunks.keys()) this.world.dirtyMesh.add(k);

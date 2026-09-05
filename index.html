@@ -54,6 +54,7 @@
         <div class="row buttons">
           <button id="play" class="btn primary">Играть</button>
           <button id="open-settings" class="btn ghost">Настройки</button>
+          <button id="menu-net" class="btn ghost">Сеть</button>
         </div>
         <div id="worlds" class="worlds"></div>
         <details class="controls">
@@ -83,12 +84,73 @@
         <h2>Настройки</h2>
         <div id="settings-body"></div>
         <div class="row buttons">
+          <button id="settings-net" class="btn ghost">Сетевая игра</button>
           <button id="settings-close" class="btn primary">Готово</button>
         </div>
         <p class="muted small">Настройки сохраняются в этом браузере.</p>
       </div>
     </div>
 
+
+    <div id="net" class="screen hidden">
+      <div class="panel box wide">
+        <h2>Сетевая игра</h2>
+        <div class="row net-cols">
+          <label class="field">
+            <span>Кем быть</span>
+            <div class="seg" id="net-role">
+              <button data-v="host" class="on">Хост (мой мир)</button>
+              <button data-v="guest">Гость (мир хоста)</button>
+            </div>
+          </label>
+          <label class="field">
+            <span>Имя игрока</span>
+            <input id="net-name" type="text" maxlength="24" autocomplete="off" placeholder="как тебя звать" />
+          </label>
+        </div>
+        <div class="row net-cols">
+          <label class="field wide">
+            <span>Адрес реле (из строки npm run net)</span>
+            <input id="net-url" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>Комната</span>
+            <input id="net-room" type="text" maxlength="32" autocomplete="off" spellcheck="false" placeholder="world" />
+          </label>
+        </div>
+        <div class="row buttons">
+          <button id="net-connect" class="btn primary">Через реле: играть</button>
+          <button id="net-stop" class="btn ghost danger">Выйти из сети</button>
+        </div>
+        <details class="controls net-p2p">
+          <summary>Вдвоём без сервера (WebRTC)</summary>
+          <p class="muted small">Хост нажимает «Создать код» и отправляет получившуюся строку второму
+            игроку так, как удобно (мессенджер, почта). Второй вставляет код, нажимает «Вставить и
+            ответить» и возвращает код обратно. Дальше мир общий, сервер не нужен.</p>
+          <div class="row buttons">
+            <button id="net-offer" class="btn ghost">Создать код приглашения</button>
+            <button id="net-answer" class="btn ghost">Вставить и ответить</button>
+          </div>
+          <label class="field wide">
+            <span>Коды: сюда вставлять, отсюда копировать</span>
+            <textarea id="net-code" rows="5" spellcheck="false" placeholder="вставить приглашение и нажать «Вставить и ответить»"></textarea>
+          </label>
+        </details>
+        <div id="net-status" class="net-status">сеть выключена</div>
+        <div id="net-peers" class="muted small"></div>
+        <div class="row net-chat hidden" id="net-chat-row">
+          <label class="field wide">
+            <span>Сообщение остальным</span>
+            <input id="net-chat" type="text" maxlength="160" autocomplete="off" placeholder="Enter — отправить" />
+          </label>
+        </div>
+        <p class="muted small">Мир по сети не передаётся: он одинаковый у всех из сида, поэтому летают
+          только позиция, правки блоков и чат. Своему реле: <code>npm run net</code>.</p>
+        <div class="row buttons">
+          <button id="net-close" class="btn primary">Закрыть</button>
+        </div>
+      </div>
+    </div>
     <div id="inventory" class="screen hidden">
       <div class="panel box wide">
         <h2>Инвентарь <span class="muted small" id="inv-hint">клик по клетке — взять, клик по другой — положить · E / Esc — закрыть</span></h2>

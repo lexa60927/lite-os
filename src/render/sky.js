@@ -221,6 +221,12 @@ export class Sky {
       voxelUniforms.uAmbient.value.setRGB(0.3, 0.34, 0.44).multiplyScalar(0.32 + day * 0.75);
       voxelUniforms.uSunColor.value.setRGB(1, 0.93 - dusk * 0.2, 0.82 - dusk * 0.3);
       voxelUniforms.uFogColor.value.copy(hor).lerp(zen, 0.25);
+      // направление солнца для бликов в шейдере вокселей. Ниже горизонта его
+      // держать нельзя: иначе ночные нижние грани получали бы «солнечный»
+      // коэффициент сильнее верхних, и рельеф выворачивалось наизнанку.
+      if (voxelUniforms.uSunDirW) {
+        voxelUniforms.uSunDirW.value.set(dir.x, Math.max(dir.y, 0.05), dir.z).normalize();
+      }
     }
     return { day, night, dusk, horizonColor: hor.clone(), fogColor: voxelUniforms ? voxelUniforms.uFogColor.value.clone() : hor.clone() };
   }

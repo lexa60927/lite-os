@@ -16,8 +16,10 @@
     "test:calm": "node dev/test-calm.mjs",
     "test:uv": "node dev/test-uv.mjs",
     "test:stream": "node dev/test-stream.mjs",
+    "test:net": "node --experimental-loader ./dev/loaders/css.mjs dev/test-net.mjs",
     "test:villages": "node --experimental-loader ./dev/loaders/css.mjs dev/test-villages.mjs",
-    "bench:mesh": "node dev/bench-mesh.mjs"
+    "bench:mesh": "node dev/bench-mesh.mjs",
+    "net": "node dev/net-server.mjs"
   },
   "dependencies": {
     "three": "0.160.1"

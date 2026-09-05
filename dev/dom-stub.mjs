@@ -72,6 +72,15 @@ class Ctx2 {
     return { data, width: w, height: h };
   }
   createLinearGradient() { return { addColorStop() {} }; }
+  // текст и трансформации — их рисовать в Node некому, но методы обязаны
+  // существовать: иначе любой код, подписывающий canvas (табличка имени в
+  // сетевой игре), роняет тесты, которые в браузере проходят
+  fillText(text, x, y) { this.text = { text, x, y }; }
+  strokeText(text, x, y) { this.text = { text, x, y }; }
+  measureText(t) { return { width: String(t).length * 8 }; }
+  save() {} restore() {} translate() {} rotate() {} scale() {} setTransform() {}
+  beginPath() {} closePath() {} moveTo() {} lineTo() {} arc() {} fill() {} stroke() {} clip() {} rect() {}
+  createPattern() { return null; }
 }
 
 class Canvas {
@@ -113,6 +122,11 @@ class El {
     this.handlers = {};
     if (tag === 'canvas') return new Canvas();
   }
+  // className и classList в браузере — одна и та же информация; без синхронизации
+  // заглушка «теряла» классы, проставленные через className, и проверки вида
+  // «в палитре 62 слота» давали ложный ноль
+  get className() { return this.classList.value; }
+  set className(v) { this.classList.set = new Set(String(v).split(/\s+/).filter(Boolean)); }
   set innerHTML(v) { this._html = v; if (v === '') this.children = []; }
   get innerHTML() { return this._html; }
   appendChild(c) { this.children.push(c); c.parent = this; return c; }
@@ -150,6 +164,8 @@ export function installDom({ width = 1280, height = 800 } = {}) {
     body: new El('body'),
     documentElement: new El('html'),
     createElement: (tag) => new El(tag),
+    // текст без обёртки — hud вставляет подписи чекбоксов именно так
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t), parentNode: null }),
     getElementById(id) {
       if (!byId.has(id)) byId.set(id, new El('div', id));
       return byId.get(id);

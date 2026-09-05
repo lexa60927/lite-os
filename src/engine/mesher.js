@@ -5,9 +5,8 @@
  * Атрибуты вершины: position(3, локально в чанке), uv(2), light(4) = [окклюзия, небо, блок, волна],
  * tint(3) — оттенок биома (трава/листва/вода), по умолчанию белый.
  */
-import { CHUNK, HEIGHT, idx } from './constants.js';
+import { CHUNK, HEIGHT, idx, SEA_TOP } from './constants.js';
 
-const SEA_TOP = 38;              // вода/болотная вода живут ниже этого — не режем
 import { BLOCKS } from './blocks.js';
 import { OPAQUE, RENDER, HIDE_SAME, CUTOUT, FULL_BRIGHT, LIGHT, INSET, TINTED, WATER_TINT, PLANT_H, R_CUBE, R_LIQUID, R_CROSS, R_TORCH } from './props.js';
 import { BIOME_TINT, BIOME_WATER_TINT } from './gen.js';

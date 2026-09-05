@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS = {
   dayLength: 8,
   freeTime: false,
   clouds: 0.75,
+  shaders: 1,
+  netName: '', netUrl: '', netRoom: 'world',
   renderScale: 1,
   ao: true,
   smoothLight: true,
@@ -22,6 +24,27 @@ export const DEFAULT_SETTINGS = {
   showDebug: true,
   touch: false,
 };
+
+
+// Категории палитры креатива — только для отображения: порядок id в BLOCKS
+// нагрузочный (блоки 38+ — предметы и инструменты), поэтому сортируем здесь,
+// а не трогаем реестр блоков.
+const CREATIVE_CATEGORIES = [
+  ['Стройка', null], ['Природа', null], ['Руды и свет', null], ['Растения и ферма', null],
+  ['Инструменты', null], ['Предметы', null], ['Прочее', null],
+];
+const CAT_KEYS = {
+  'Стройка': ['stone', 'cobblestone', 'stone_bricks', 'bricks', 'planks', 'log', 'glass', 'sandstone', 'obsidian', 'crafting_table', 'wool_white', 'wool_red', 'wool_blue', 'wool_yellow', 'wool_lime', 'wool_black'],
+  'Природа': ['grass', 'dirt', 'sand', 'gravel', 'leaves', 'snow', 'podzol', 'bedrock', 'cactus', 'water'],
+  'Руды и свет': ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'redstone_ore', 'glowstone'],
+  'Растения и ферма': ['tall_grass', 'fern', 'flower_red', 'flower_yellow', 'sapling', 'wheat', 'farmland', 'hay_block'],
+};
+function categoryOf(key) {
+  for (const [cat, keys] of Object.entries(CAT_KEYS)) if (keys.includes(key)) return cat;
+  if (/_pickaxe|_axe|_shovel|_sword/.test(key)) return 'Инструменты';
+  if (key === 'emerald' || key.endsWith(':item') || ['leather', 'pork', 'stick', 'coal_item'].includes(key)) return 'Предметы';
+  return 'Прочее';
+}
 
 export const CONTROLS = [
   ['WASD / ←↑↓→', 'движение'],
@@ -56,6 +79,9 @@ export class Hud {
       settingsBody: $('settings-body'), pauseStats: $('pause-stats'), controls: $('controls-list'),
       invCursor: $('inv-cursor'), invCraft: $('inv-craft'), invCraftTitle: $('inv-craft-title'),
       invPalette: $('inv-palette'), invPaletteTitle: $('inv-palette-title'), invHint: $('inv-hint'),
+      net: $('net'), netStatus: $('net-status'), netPeers: $('net-peers'), netRole: $('net-role'),
+      netName: $('net-name'), netUrl: $('net-url'), netRoom: $('net-room'), netCode: $('net-code'),
+      netChat: $('net-chat'), netChatRow: $('net-chat-row'),
     };
     this.slots = [];
     this.settings = { ...DEFAULT_SETTINGS };
@@ -64,7 +90,7 @@ export class Hud {
 
   // -------------------------------------------------------------- экраны
   show(name) {
-    for (const key of ['menu', 'pause', 'settings', 'inventory', 'loading']) {
+    for (const key of ['menu', 'pause', 'settings', 'inventory', 'loading', 'net']) {
       this.el[key].classList.toggle('hidden', key !== name);
     }
     this.el.hud.classList.toggle('hidden', name !== null);
@@ -74,6 +100,55 @@ export class Hud {
   setLoading(p, text) {
     this.el.loadFill.style.width = `${Math.round(p * 100)}%`;
     if (text) this.el.loadText.textContent = text;
+  }
+
+  // ------------------------------------------------------------- сетевая игра
+  /** Что сейчас в полях панели сети. */
+  netState() {
+    return {
+      role: this._netRole ?? 'host',
+      name: (this.el.netName?.value ?? '').trim(),
+      url: (this.el.netUrl?.value ?? '').trim(),
+      room: (this.el.netRoom?.value ?? '').trim(),
+    };
+  }
+
+  /** Предзаполнить панель; connected — показать поле чата и не трогать адрес вслепую. */
+  netPrefill(v) {
+    if (this.el.netName) this.el.netName.value = v.name ?? '';
+    if (this.el.netUrl) this.el.netUrl.value = v.url ?? '';
+    if (this.el.netRoom) this.el.netRoom.value = v.room ?? '';
+    this.netRole(v.role ?? 'host');
+    if (this.el.netChatRow) this.el.netChatRow.classList.toggle('hidden', !v.connected);
+    if (v.text !== undefined) this.netStatus(v.text ?? '', v.kind ?? '');
+  }
+
+  /** Переключатель «хост/гость»: кнопки лежат в .seg, состояние держим у себя. */
+  netRole(role) {
+    this._netRole = role === 'guest' ? 'guest' : 'host';
+    for (const b of this.el.netRole?.children ?? []) {
+      if (b && b.classList) b.classList.toggle('on', (b.dataset?.v ?? '') === this._netRole);
+    }
+  }
+
+  netStatus(text, kind = '') {
+    const el = this.el.netStatus;
+    if (!el) return;
+    el.textContent = text;
+    el.classList?.toggle('on', kind === 'on');
+    el.classList?.toggle('err', kind === 'err');
+  }
+
+  netCode(text) { if (this.el.netCode) this.el.netCode.value = text ?? ''; }
+  netCodeValue() { return String(this.el.netCode?.value ?? ''); }
+
+  netPeers(list) {
+    const el = this.el.netPeers;
+    if (!el) return;
+    const s = list.length
+      ? 'в комнате: ' + list.map((p) => `${p.name} (${Math.round(p.x ?? 0)}; ${Math.round(p.z ?? 0)})`).join(', ')
+      : 'пока никого — правки и шаги видят только тебя';
+    if (el.textContent !== s) el.textContent = s;
   }
 
   toast(text, kind = '') {
@@ -141,7 +216,7 @@ export class Hud {
 
   /** Полный экран инвентаря: рюкзак + хотбар + курсор + крафт + палитра. */
   renderInventory(view) {
-    const { snap, recipes, creative, icon, names, onSlot, onPick, onCraft, nearTable } = view;
+    const { snap, recipes, creative, icon, names, onSlot, onPick, onCraft, nearTable, onCreative } = view;
     this.onInvSlot = onSlot;
     const mk = (id, n, kind, index) => {
       const slot = document.createElement('div');
@@ -195,23 +270,65 @@ export class Hud {
       row.appendChild(btn);
       craft.appendChild(row);
     });
+    // ── палитра креатива: ВСЕ блоки и предметы, сгруппированные и с поиском ──
+    // Раньше это был один сплошной список по id: найти нужный блок среди 60+
+    // иконок было нельзя, и «креатив, где все блоки есть» формально работал, но
+    // пользоваться им было тяжело.
     const pal = this.el.invPalette;
     const palTitle = this.el.invPaletteTitle;
     if (pal) {
       pal.innerHTML = '';
       if (palTitle) palTitle.style.display = creative ? '' : 'none';
       if (creative) {
+        if (palTitle) {
+          palTitle.innerHTML = '';
+          const txt = document.createElement('span');
+          txt.textContent = 'Все блоки (' + BLOCKS.filter((d) => d && d.id && d.render !== 'none').length + ')';
+          const find = document.createElement('input');
+          find.type = 'search';
+          find.className = 'pal-search';
+          find.placeholder = 'Поиск: стекло, кирка, шерсть…';
+          find.value = this.palQuery ?? '';
+          find.oninput = () => { this.palQuery = find.value; this.renderInventory(view); };
+          const tog = document.createElement('button');
+          tog.className = 'btn ghost mini';
+          tog.textContent = 'Творчество: вкл';
+          tog.title = 'Выключить — инвентарь снова становится обычным, а блоки начинают тратиться';
+          tog.onclick = () => { onCreative?.(); this.renderInventory(view); };
+          palTitle.append(txt, find, tog);
+        }
+        const q = (this.palQuery ?? '').trim().toLowerCase();
+        const buckets = new Map(CREATIVE_CATEGORIES.map((c) => [c[0], []]));
         for (const def of BLOCKS) {
           if (!def.id || def.render === 'none') continue;
-          const slot = document.createElement('div');
-          slot.className = 'slot';
-          const img = document.createElement('img');
-          img.src = icon(def.id, 36);
-          img.alt = def.name;
-          slot.appendChild(img);
-          slot.title = def.name;
-          slot.onclick = () => onPick(def.id);
-          pal.appendChild(slot);
+          if (q && !(def.name.toLowerCase().includes(q) || def.key.includes(q))) continue;
+          (buckets.get(categoryOf(def.key)) ?? buckets.get('Прочее')).push(def);
+        }
+        let shown = 0;
+        for (const [label, list] of buckets) {
+          if (!list.length) continue;
+          shown += list.length;
+          const head = document.createElement('div');
+          head.className = 'pal-cat';
+          head.textContent = label;
+          pal.appendChild(head);
+          for (const def of list) {
+            const slot = document.createElement('div');
+            slot.className = 'slot';
+            const img = document.createElement('img');
+            img.src = icon(def.id, 36);
+            img.alt = def.name;
+            slot.appendChild(img);
+            slot.title = def.name;
+            slot.onclick = () => onPick(def.id);
+            pal.appendChild(slot);
+          }
+        }
+        if (q && !shown) {
+          const empty = document.createElement('div');
+          empty.className = 'muted pal-empty';
+          empty.textContent = `По запросу «${q}» в палитре ничего нет — попробуй «кирка», «шерсть», «песч»`;
+          pal.appendChild(empty);
         }
       }
     }
@@ -220,6 +337,13 @@ export class Hud {
   selectSlot(i) {
     this.sel = i;
     [...this.slots, ...(this.invSlots ?? [])].forEach((s, n) => s.classList.toggle('sel', n % 9 === i));
+  }
+
+  /** Кинематографичная виньетка для режима «красивые» шейдеры. */
+  setCinematic(on) {
+    const el = this.el.vignette;
+    if (!el || !el.classList) return;
+    el.classList.toggle('cine', !!on);
   }
 
   showBlockName(id) {
@@ -290,6 +414,17 @@ export class Hud {
       { key: 'dayLength', label: 'Длина суток, мин', min: 2, max: 40, step: 1, fmt: (v) => `${v}` },
       { key: 'mobs', label: 'Мобов вокруг', min: 0, max: 32, step: 1, fmt: (v) => (v ? `${v}` : 'выкл') },
     ];
+    const selects = [
+      {
+        key: 'shaders',
+        label: 'Шейдеры',
+        options: [
+          [0, 'Выкл — базовая картинка'],
+          [1, 'Мягкие — блики, дымка, живая вода'],
+          [2, 'Красивые — тонмаппинг, небо в отражениях, виньетка'],
+        ],
+      },
+    ];
     const checks = [
       { key: 'ao', label: 'Мягкое затенение (AO)' },
       { key: 'smoothLight', label: 'Плавный свет' },
@@ -321,6 +456,22 @@ export class Hud {
         onChange(d.key, v);
       };
       row.append(lab, input, val);
+      box.appendChild(row);
+    }
+    for (const d of selects) {
+      const row = document.createElement('div');
+      row.className = 'setting';
+      const lab = document.createElement('label');
+      lab.textContent = d.label;
+      const sel = document.createElement('select');
+      for (const [v, text] of d.options) {
+        const o = document.createElement('option');
+        o.value = String(v); o.textContent = text;
+        if (Number(settings[d.key]) === v) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.onchange = () => { const v = +sel.value; settings[d.key] = v; onChange(d.key, v); };
+      row.append(lab, sel);
       box.appendChild(row);
     }
     for (const c of checks) {

@@ -52,6 +52,7 @@ body {
 }
 #water-tint.on { opacity: 1; }
 #vignette { position: absolute; inset: 0; box-shadow: inset 0 0 220px rgba(0, 0, 0, 0.55); opacity: 0.75; }
+#vignette.cine { opacity: 0.95; box-shadow: inset 0 0 300px rgba(6, 10, 26, 0.62); }
 #vignette.hurt { box-shadow: inset 0 0 160px rgba(180, 20, 20, 0.75); opacity: 1; transition: opacity 0.6s; }
 
 #hp {
@@ -224,3 +225,45 @@ details.controls summary { cursor: pointer; color: var(--muted); font-size: 13px
   .slots27 { grid-template-columns: repeat(9, 38px); }
   .slots27 .slot { width: 38px; height: 38px; }
 }
+
+/* ───────── палитра креатива: заголовок-строка, поиск, категории ───────── */
+#inv-palette-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#inv-palette-title .btn.mini { margin-left: auto; padding: 3px 8px; font-size: 11px; }
+.pal-search {
+  flex: 1 1 120px; min-width: 110px; padding: 3px 7px; font-size: 12px;
+  background: var(--slot); color: var(--text); border: 1px solid var(--line); border-radius: 3px;
+}
+.pal-search:focus { outline: none; border-color: var(--accent); }
+.palette .pal-cat {
+  grid-column: 1 / -1;
+  margin: 7px 0 1px; font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--accent); opacity: 0.85;
+}
+.palette .pal-cat:first-child { margin-top: 0; }
+
+/* ───────── сетевая игра ───────── */
+.net-cols { display: flex; gap: 10px; align-items: flex-end; }
+.net-cols .field { flex: 1; }
+.field.wide { flex: 2.4; }
+#net textarea {
+  width: 100%; min-height: 74px; resize: vertical; padding: 6px 8px;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); background: var(--slot); border: 1px solid var(--line); border-radius: 4px;
+  user-select: text; white-space: pre; overflow: auto;
+}
+#net textarea:focus { outline: none; border-color: var(--accent); color: var(--text); }
+.seg { display: flex; gap: 4px; }
+.seg button {
+  flex: 1; padding: 6px 8px; font-size: 12px; cursor: pointer; color: var(--muted);
+  background: var(--slot); border: 1px solid var(--line); border-radius: 4px;
+}
+.seg button.on { color: #08130a; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.net-status {
+  margin: 10px 0 4px; padding: 7px 10px; font-size: 12px; line-height: 1.4;
+  background: rgba(0, 0, 0, 0.25); border-left: 3px solid var(--muted); white-space: pre-wrap;
+}
+.net-status.on { border-left-color: var(--accent); color: #d6f5c8; }
+.net-status.err { border-left-color: var(--danger); color: #ffd8d3; }
+.net-p2p { margin-top: 10px; }
+.net-chat input { width: 100%; }
+.palette .pal-empty { grid-column: 1 / -1; font-size: 12px; padding: 6px 0; }

@@ -1,6 +1,7 @@
 export const CHUNK = 16;          // размер чанка по X/Z
 export const HEIGHT = 96;         // высота мира
 export const SEA = 34;            // уровень моря
+export const SEA_TOP = SEA + 4;   // верхняя вода: мешеер не режет по hmax выше неё, дымка считается от неё
 export const SNOW_LINE = 60;      // выше — снежные вершины
 export const MAX_EDIT_Y = HEIGHT - 1;
 

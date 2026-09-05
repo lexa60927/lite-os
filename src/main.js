@@ -30,6 +30,9 @@ import { installTouch } from './ui/touch.js';
 import { Inventory, STACK } from './game/inventory.js';
 import { RECIPES_CLEAN, canCraft, craft } from './game/craft.js';
 import { Mobs } from './game/mobs.js';
+import { NetSession, cleanRoom, MAX_PLAYERS } from './game/net.js';
+import { wsTransport, rtcTransport, defaultRelayUrl } from './game/netTransport.js';
+import { PeerAvatars } from './render/avatars.js';
 
 const HOTBAR_DEFAULT = ['grass', 'dirt', 'stone', 'cobblestone', 'planks', 'log', 'glass', 'torch', 'glowstone'];
 const FIXED = 1 / 60;
@@ -96,8 +99,20 @@ export class Game {
       onDrop: (id, n) => this.pickup(id, n),
     });
     this.debouncedSave = debounce(() => this.save(), 1500);
+    // сеть: сессия и транспорт живут на Game, чтобы пережить смену мира (гость
+    // принимает сид хоста -> start() пересоздаёт world/chunkView, но не это)
+    this.net = null;
+    this.netTransport = null;
+    this.netKind = null;      // 'relay' | 'p2p'
+    this.netRole = 'host';
+    this.netAdopt = false;   // перенимать чужой сид?
+    this.netRtcWait = null;  // 'answer' — ждём ли ответ на наше приглашение
+    this.netPanelOpen = false;
+    this._netHudT = 0;
+    this.avatars = new PeerAvatars(this.scene);
     this.applySettings(null, true);
     this.bindUI();
+    this.bindNet();
     this.bindInput();
     this.resize();
     addEventListener('resize', () => this.resize());
@@ -192,6 +207,10 @@ export class Game {
     const s = this.settings;
     mesherFlags.ao = s.ao;
     mesherFlags.smoothLight = s.smoothLight;
+    // «шейдеры» — одна униформа, поэтому перестройка чанков не нужна: картинка
+    // меняется мгновенно, без перерасхода на меш
+    this.materials?.setQuality?.(s.shaders);
+    this.hud?.setCinematic?.(s.shaders >= 2);
     if (this.chunkView) this.chunkView.setRenderDistance(s.renderDistance);
     if (this.audio.ready) this.audio.setVolumes(s.sfx, s.music);
     this.audio.musicVolume = s.music;
@@ -202,6 +221,251 @@ export class Game {
     if (key === 'ao' || key === 'smoothLight') { this.chunkView?.rebuildAll(); }
     if (key === 'renderScale' || key === null) this.applyPixelRatio();
     if (key === 'touch' || key === null) this.setupTouch();
+  }
+
+
+  // -------------------------------------------------------------- сеть
+  openNet() {
+    this.netPanelOpen = true;
+    const url = this.settings.netUrl || defaultRelayUrl(this.settings.netRoom || 'world');
+    this.hud.netPrefill({
+      name: this.settings.netName || '', url, room: this.settings.netRoom || 'world',
+      role: this.netRole, connected: !!this.net,
+      text: this.net
+        ? `${this.netKind === 'p2p' ? 'прямое соединение' : `комната ${cleanRoom(this.netRoomName ?? '')}`}: игроков ${this.net.peers.size + 1}`
+        : undefined,
+      kind: this.net ? 'on' : '',
+    });
+    this.hud.show('net');
+    document.exitPointerLock?.();
+  }
+
+  closeNet() {
+    this.netPanelOpen = false;
+    this.hud.show(this.state.running ? 'pause' : 'menu');
+    if (this.state.running) this.resume();
+  }
+
+  /** Кнопки панели сети. Вешаются один раз на старте, обработчики читают поля. */
+  bindNet() {
+    const el = this.hud.el;
+    document.getElementById('settings-net').onclick = () => this.openNet();
+    document.getElementById('menu-net').onclick = () => this.openNet();
+    document.getElementById('net-close').onclick = () => this.closeNet();
+    document.getElementById('net-connect').onclick = () => this.netConnectRelay();
+    document.getElementById('net-stop').onclick = () => this.netLeave('сеть выключена');
+    document.getElementById('net-offer').onclick = () => this.netRtcOffer();
+    document.getElementById('net-answer').onclick = () => this.netRtcExchange();
+    for (const b of el.netRole?.children ?? []) {
+      b.onclick = () => { this.netRole = b.dataset?.v === 'guest' ? 'guest' : 'host'; this.hud.netRole(this.netRole); };
+    }
+    el.netChat.onkeydown = (e) => {
+      e.stopPropagation?.();   // иначе W/A/S/D игрока нажмутся прямо в поле
+      if (e.key === 'Enter') this.netSendChat();
+    };
+  }
+
+  /** Транспорт -> NetSession: одна и та же обвязка и для реле, и для WebRTC. */
+  netAttach(transport, { kind, shareSeed, adopt }) {
+    const seed = (this.state.seed ?? DEFAULT_SEED) >>> 0;
+    this.netKind = kind;
+    this.netAdopt = !!adopt;
+    const session = new NetSession({
+      // id случайный: один и тот же браузер может открыть две вкладки в одной комнате
+      id: `${kind}-${Math.random().toString(36).slice(2, 9)}`,
+      name: this.hud.netState().name || 'игрок',
+      seed, blockCount: BLOCKS.length, shareSeed,
+      send: (text) => transport.send(text),
+      log: (m) => this.hud.netStatus(String(m), 'err'),
+      onEdit: (e) => this.netApplyEdit(e),
+      onPeerJoin: (id, peer) => this.hud.toast(`${peer.name ?? 'игрок'} в сети`, ''),
+      onPeerLeave: (id) => { this.hud.toast('игрок вышел из сети', 'warn'); this.avatars.remove(id); },
+      onChat: (who, text) => this.hud.toast(`${who}: ${text}`, ''),
+      onSeed: (sd) => this.netAdoptSeed(sd),
+    });
+    transport.onMessage((text) => session.handle(text));
+    transport.onOpen?.(() => session.announce({ role: this.netRole }));
+    transport.onClose?.(() => {
+      if (this.net !== session) return;
+      this.hud.netStatus('связь потеряна — «Выйти из сети» почистит состояние, потом можно подключиться заново', 'err');
+      this.hud.toast('сеть отвалилась', 'warn');
+    });
+    transport.onError?.((m) => {
+      if (this.net !== session) return;
+      this.hud.netStatus(String(m ?? 'ошибка соединения'), 'err');
+    });
+    this.netTransport = transport;
+    this.net = session;
+    // для реле announce() уйдёт в очередь и улетит на onopen; для открытого
+    // WebRTC-канала оно уже полезно сразу — поэтому зовём безусловно
+    session.announce({ role: this.netRole });
+    return session;
+  }
+
+  /** Подключение через реле (нужен запущенный `npm run net`). */
+  netConnectRelay() {
+    if (this.net) this.netLeave();
+    const f = this.hud.netState();
+    const room = cleanRoom(f.room);
+    this.netRoomName = room;
+    let base = f.url || defaultRelayUrl(room);
+    if (!/^wss?:\/\//i.test(base)) {
+      this.hud.netStatus('адрес должен начинаться с ws:// или wss://', 'err');
+      return;
+    }
+    base = base.replace(/\/+$/, '');
+    const url = `${base}/${room}`;
+    this.settings.netUrl = base; this.settings.netRoom = room; this.settings.netName = f.name;
+    saveSettings(this.settings);
+    this.hud.netStatus(`стучимся на ${url}…`, '');
+    const tr = wsTransport(url);
+    this.netAttach(tr, {
+      kind: 'relay',
+      shareSeed: f.role === 'host',
+      adopt: f.role === 'guest',
+    });
+    this.netEnsureWorld();
+    // отдельный опрос нужен только ради честного «есть связь»: событие onopen
+    // могло прийтись на момент между созданием сокета и подпиской
+    this._netPoll = setInterval(() => {
+      if (!this.net || this.netTransport !== tr) { clearInterval(this._netPoll); this._netPoll = 0; return; }
+      if (tr.ready) {
+        clearInterval(this._netPoll); this._netPoll = 0;
+        this.hud.netStatus(`в комнате ${room} · ждём игроков (до ${MAX_PLAYERS})`, 'on');
+      }
+    }, 400);
+    this._netWait = setTimeout(() => {
+      this._netWait = 0;
+      if (this.net && this.netTransport === tr && !tr.ready) {
+        this.hud.netStatus('реле не отвечает: запущен ли `npm run net`? совпадают ли адрес и комната?', 'err');
+      }
+    }, 6000);
+  }
+
+  /** Вдвоём без сервера: хост создаёт код приглашения, гость отвечает своим. */
+  async netRtcOffer() {
+    if (this.net) this.netLeave();
+    const tr = rtcTransport({});
+    this.netAttach(tr, { kind: 'p2p', shareSeed: true, adopt: false });
+    this.netEnsureWorld();
+    this.netRtcWait = 'answer';   // ждём от собеседника ответ на наше приглашение
+    try {
+      const code = await tr.hostStart();
+      this.hud.netCode(code);
+      this.hud.netStatus('код приглашения — в поле ниже: отправь его второму игроку, он вернёт свой код', 'on');
+    } catch (e) {
+      this.hud.netStatus('не удалось создать приглашение: ' + (e?.message ?? e), 'err');
+    }
+  }
+
+  /**
+   * Одна кнопка на оба конца ручного свопa кодами: кто ждёт ответ — тот его
+   * принимает, кто вставил чужое приглашение — тот готовит свой код.
+   */
+  async netRtcExchange() {
+    const raw = this.hud.netCodeValue();
+    if (!raw.trim()) { this.hud.netStatus('вставьте код в поле ниже', 'err'); return; }
+    try {
+      if (this.netRtcWait === 'answer') {
+        await this.netTransport.guestFinish(raw);
+        this.netRtcWait = null;
+        this.hud.netStatus('ответ принят. если второй игрок тоже закончил — вы видите друг друга', 'on');
+        return;
+      }
+      if (!this.net) this.netAttach(rtcTransport({}), { kind: 'p2p', shareSeed: false, adopt: true });
+      else this.netAdopt = true;
+      this.netEnsureWorld();
+      const reply = await this.netTransport.guestAccept(raw);
+      this.netRtcWait = 'answer';
+      this.hud.netCode(reply);
+      this.hud.netStatus('код ответа готов — скопируй его и верни первому игроку, он нажмёт ту же кнопку', 'on');
+    } catch (e) {
+      this.hud.netStatus('код не принял: ' + (e?.message ?? e), 'err');
+    }
+  }
+
+  /**
+   * Сеть без мира бессмысленна: если игрок зашёл в комнату прямо из меню,
+   * мир берём из поля сида (хост) и потом всё равно перенимаем у того, кто
+   * объявил свой сид первым.
+   */
+  netEnsureWorld() {
+    if (this.state.running || this.state.loading) return;
+    this.hud.netStatus('готовлю мир для комнаты…', '');
+    Promise.resolve(this.startFromMenu()).catch((e) => this.hud.netStatus('мир не поднялся: ' + (e?.message ?? e), 'err'));
+  }
+
+  /** Чужой сид: мир детерминирован, поэтому перенимаем и перегенерируем свой. */
+  netAdoptSeed(seed) {
+    if (!this.netAdopt) return;
+    if ((this.state.seed ?? -1) === seed && this.state.running) return;
+    this.hud.netStatus(`перестраиваю мир под сида ${seed}…`, '');
+    Promise.resolve(this.start(seed))
+      .then(() => this.net && (this.net.seed = seed))
+      .catch((e) => this.hud.netStatus('мир хоста не построился: ' + (e?.message ?? e), 'err'));
+  }
+
+  /** Правка от соседа: пишем в тот же setBlock, что и локальный игрок. */
+  netApplyEdit({ x, y, z, id }) {
+    const w = this.state.world;
+    if (!w) return;
+    // record=true — чтобы выход игрока из сети не откатил его постройки у остальных
+    w.setBlock(x, y, z, id, true);
+  }
+
+  netSendChat() {
+    const el = this.hud.el.netChat;
+    const text = String(el?.value ?? '');
+    if (!text.trim() || !this.net) return;
+    this.net.broadcastChat(text);
+    if (el) el.value = '';
+    this.hud.toast(`ты: ${text.slice(0, 160)}`, '');
+  }
+
+  /** Локальная правка -> в комнату. Одна точка рассылки на добычу и установку. */
+  netBroadcast(x, y, z, id) {
+    if (!this.net) return;
+    this.net.broadcastEdit(x, y, z, id);
+  }
+
+  /** Раз в кадр: разослать позу, притянуть аватары, обновить список комнаты. */
+  netFrame(dt) {
+    const n = this.net;
+    if (!n) return;
+    n.tick(dt);
+    if (this.player && this.state.world && !this.state.loading) {
+      n.broadcastPosition({ x: this.player.x, y: this.player.y, z: this.player.z, yaw: this.player.yaw, pitch: this.player.pitch }, this.inv.sel);
+    }
+    const peers = n.peerList();
+    this.avatars.update(peers, dt);
+    this.avatars.setDayLight(this.sky.dayLight ?? 1);
+    const t = this.lastFrame ?? 0;
+    if (t - this._netHudT > 500) {
+      this._netHudT = t;
+      this.hud.netPeers(peers);
+    }
+  }
+
+  /** Мир поменялся (новый сид) — сообщаем комнате, чтобы все перестроились. */
+  netSync() {
+    if (!this.net) return;
+    this.net.seed = (this.state.seed ?? 0) >>> 0;
+    if (this.netKind === 'relay' && this.netRole === 'host') this.net.announceSeed();
+  }
+
+  netLeave(note = 'сеть выключена') {
+    clearInterval(this._netPoll); this._netPoll = 0;
+    clearTimeout(this._netWait); this._netWait = 0;
+    try { this.net?.leave(); } catch { /* соединение уже могло умереть */ }
+    try { this.netTransport?.close(); } catch { /* уже закрыто */ }
+    this.net = null;
+    this.netTransport = null;
+    this.netKind = null;
+    this.netAdopt = false;
+    this.netRtcWait = null;
+    this.avatars.clear();
+    this.hud.netStatus(note, '');
+    this.hud.netPeers([]);
   }
 
   setupTouch() {
@@ -261,6 +525,9 @@ export class Game {
     if (save?.hp !== undefined) this.state.hp = save.hp;
     this.mobs.world = world;
     this.mobs.clear();
+    // старый вид обязан уйти из сцены, иначе после смены сида (а в сети гость
+    // меняет мир на мир хоста) два мира рисовались бы друг на друге
+    this.chunkView?.dispose();
     this.chunkView = new ChunkView(world, this.scene, this.materials, this.atlas);
     this.chunkView.setRenderDistance(this.settings.renderDistance);
     this.setupInventory(!!save ? save.creative : undefined, save?.inv ?? save?.hotbar);
@@ -285,6 +552,7 @@ export class Game {
     this.audio.setVolumes(this.settings.sfx, this.settings.music);
     this.hud.show(null);
     this.hud.toast(`Мир ${seed} готов · ${world.chunkCount} чанков`);
+    if (this.net) this.netSync();
     this.lockPointer();
   }
 
@@ -372,6 +640,16 @@ export class Game {
 
   onKey(e, down) {
     const code = e.code;
+    // печать в полях (сид, адрес реле, чат) не должна дёргать игру: иначе
+    // «w» в ws:// разгонял игрока, а «e» посреди адреса открывал инвентарь
+    const t = e.target;
+    const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable === true);
+    if (typing && code !== 'Escape') {
+      // залипшую клавишу всё равно снимаем: фокус мог переехать на поле в момент,
+      // когда кнопка была нажата
+      if (!down) this.keys.delete(code);
+      return;
+    }
     const block = ['Tab', 'F1', 'F3', 'Space', 'KeyE', 'Slash', 'Backquote'].includes(code);
     if (down && block) e.preventDefault();
     if (down) this.keys.add(code); else this.keys.delete(code);
@@ -379,7 +657,8 @@ export class Game {
 
     const st = this.state;
     if (code === 'Escape') {
-      if (this.inventoryOpen) this.closeInventory();
+      if (this.netPanelOpen) this.closeNet();
+      else if (this.inventoryOpen) this.closeInventory();
       else if (st.running && !st.paused) this.pause();
       else if (st.paused) this.resume();
       return;
@@ -464,6 +743,9 @@ export class Game {
   setCreative(on) {
     this.inv.creative = !!on;
     this.state.creative = !!on;
+    // режим мира — настройка: после перезагрузки страницы он должен остаться
+    this.settings.creative = !!on;
+    saveSettings(this.settings);
     if (on) {
       for (let i = 0; i < 9; i++) this.inv.hotN[i] = 0;
       if (!this.inv.hot.some((id) => id)) HOTBAR_DEFAULT.forEach((k, i) => { this.inv.hot[i] = byKey(k); });
@@ -538,6 +820,7 @@ export class Game {
       onPick: (id) => this.inventoryPick(id),
       onCraft: (idx) => this.doCraft(idx),
       onClose: () => this.closeInventory(),
+      onCreative: () => { this.setCreative(!this.inv.creative); this.hud.toast(this.inv.creative ? 'Творчество: все блоки в палитре, вещи не тратятся' : 'Творчество выключено: блоки снова расходятся, включить — в Настройках', ''); },
     });
   }
 
@@ -641,6 +924,7 @@ export class Game {
   resume() {
     this.state.paused = false;
     this.inventoryOpen = false;
+    this.netPanelOpen = false;
     this.hud.show(null);
     this.lockPointer();
     this.audio.resume();
@@ -648,6 +932,8 @@ export class Game {
 
   toMenu() {
     this.input.mine = 0; this.input.place = 0; this.keys.clear();
+    this.netPanelOpen = false;
+    if (this.net) this.netLeave('вы вышли из мира — комната покинута');
     this.mobs.clear();
     this.state.running = false;
     this.state.paused = false;
@@ -755,6 +1041,7 @@ export class Game {
       return;
     }
     if (!world.setBlock(tx, ty, tz, id)) return;
+    this.netBroadcast(tx, ty, tz, id);
     if (!this.inv.creative) { this.inv.consumeSelected(1); this.syncHotbar(); }
     this.audio.place(BLOCKS[id].sound);
     this.viewModel.triggerSwing();
@@ -807,6 +1094,7 @@ export class Game {
       this.target.setBreakProgress(0);
       this.hud.setMining(false);
       world.setBlock(hit.x, hit.y, hit.z, AIR);
+      this.netBroadcast(hit.x, hit.y, hit.z, AIR);
       if (!this.inv.creative) this.pickup(dropOf(hit.id), 1);
       this.audio.breakBlock(def.sound);
       const tint = this.blockTint.get(hit.id) ?? [0.7, 0.7, 0.7];
@@ -875,11 +1163,15 @@ export class Game {
     this.state.fps = this.state.fps * 0.9 + (1 / Math.max(0.0005, dt)) * 0.1;
     const t0 = performance.now();
 
-    if (this.state.running && !this.state.paused && !this.inventoryOpen && !this.state.loading) this.step(dt);
+    const panel = this.inventoryOpen || this.netPanelOpen;
+    if (this.state.running && !this.state.paused && !panel && !this.state.loading) this.step(dt);
     else if (this.state.world) {
       // в меню/паузе всё равно обновляем небо, чтобы фон жил
       this.sky.update(this.state.time, this.settings.clouds, this.camera.position, this.materials.uniforms);
     }
+    // сеть живёт отдельно от шага мира: встать в паузу ≠ исчезнуть для соседей,
+    // иначе аватары замирают, а правки перестают расходиться
+    if (this.net) this.netFrame(dt);
 
     this.renderer.render(this.scene, this.camera);
     this.state.ms = this.state.ms * 0.9 + (performance.now() - t0) * 0.1;
@@ -1084,6 +1376,7 @@ export class Game {
       `XYZ ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}  чанк ${cx},${cz}  блок ${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`,
       `биом: ${biome}  ·  время ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}  ·  свет ${(sky.day * 15) | 0}/15`,
       `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount} · стриминг ${cv?.stats.ms?.toFixed(1) ?? 0} мс/кадр (${cv?.stats.frameMs?.toFixed(1) ?? '—'} мс кадр)${(() => { const d = cv?.streamDebug?.(); return d && (d.genErr || d.meshErr || d.light > 64) ? ` · сбой: ген ${d.genErr}, меш ${d.meshErr}, свет ${d.light}` : ''; })()}${this.inVillage ? ' · деревня' : ''}`,
+      `сеть: ${this.net ? `${this.netKind === 'p2p' ? 'напрямую' : 'через реле'}, игроков ${this.net.peers.size + 1}/${MAX_PLAYERS}, правок ${this.net.edits}` : 'одиночная игра'} · ` +
       `режим: ${p.flying ? 'полёт' : p.sprinting ? 'бег' : 'ходок'} · HP ${this.state.hp / 2} · ${this.inv.creative ? 'творчество' : 'выживание'} · сид ${this.state.seed}`,
       `мобов вокруг: ${this.mobs.count} (видно ${this.mobs.nearCount(p, 48)}) · убито: ${this.mobs.kills} · в руке: ${BLOCKS[this.inv.hot[this.inv.sel]]?.name ?? '—'} ×${this.inv.creative ? '∞' : this.inv.hotN[this.inv.sel]}`,
       `${p.headInWater ? 'под водой' : p.inWater ? 'в воде' : 'на суше'}${p.onGround ? ' · на земле' : ''} · E — инвентарь, F3 — вкл/выкл панели`,
