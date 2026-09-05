@@ -46,6 +46,23 @@ console.log(`  спавн ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)} 
 if (st.world.chunkCount < 20) throw new Error('слишком мало чанков после загрузки');
 if (renders < 1) throw new Error('render() не вызывался');
 
+// --- звук: процедурный синтез не должен ронять игру ---
+game.audio.resume();
+const audioUp = !!game.audio.ctx;
+let audioErr = null;
+try {
+  game.audio._pad(220, 1.2, 0.02, 0);
+  game.audio._bell(660, 1.0, 0.03, 0.1);
+  game.audio.hit('stone'); game.audio.breakBlock('wood'); game.audio.place('glass');
+  game.audio.step('grass'); game.audio.jump(); game.audio.land(1.4); game.audio.splash();
+  game.audio.ui('click'); game.audio.deny(); game.audio.openInv();
+  game.audio.setVolumes(0.3, 0.5);
+  game.audio.toggleMusic(); game.audio.toggleMusic();
+} catch (e) { audioErr = e; }
+console.log(`${audioUp && game.audio._musicTimer && !audioErr ? '✔' : '✘'} звук: контекст ${audioUp ? 'есть' : 'нет'}, такт ${game.audio._musicTimer ? 'идёт' : 'нет'}${audioErr ? ' · ошибка ' + audioErr.message : ''}`);
+if (!audioUp || !game.audio._musicTimer) throw new Error(audioErr ?? 'аудио не поднялось');
+game.audio.stopMusic();
+
 // --- ровная площадка для детерминированной проверки физики ---
 const { byKey } = await import('../src/engine/blocks.js');
 const bx0 = Math.floor(p.x), bz0 = Math.floor(p.z), PY = 45;

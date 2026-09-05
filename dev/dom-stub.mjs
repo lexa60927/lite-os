@@ -172,6 +172,8 @@ export function installDom({ width = 1280, height = 800 } = {}) {
     innerHeight: height,
     devicePixelRatio: 1,
     matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
+    AudioContext: AudioContextStub,
+    webkitAudioContext: AudioContextStub,
     requestAnimationFrame: (fn) => { raf.push(fn); return raf.length; },
     localStorage: null,
     __LITECRAFT_TEST__: true,

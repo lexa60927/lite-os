@@ -176,6 +176,8 @@ export class Audio {
       void now;
     };
     const pad = (freq, dur, gain, when) => {
+      const ctx = this.ctx;
+      if (!ctx) return;
       const t = ctx.currentTime + when;
       const o = ctx.createOscillator();
       o.type = 'sine';
@@ -192,6 +194,8 @@ export class Audio {
       o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
     };
     const bell = (freq, dur, gain, when) => {
+      const ctx = this.ctx;
+      if (!ctx) return;
       const t = ctx.currentTime + when;
       const o = ctx.createOscillator();
       o.type = 'sine';
@@ -208,8 +212,17 @@ export class Audio {
     };
     this._pad = pad;
     this._bell = bell;
-    playBar();
-    this._musicTimer = setInterval(playBar, 5400);
+    // фоновая музыка — не критично: если синтез споткнулся, выключаем её и живём дальше
+    const safeBar = () => {
+      try {
+        playBar();
+      } catch (err) {
+        console.warn('музыка выключена:', err?.message ?? err);
+        this.stopMusic();
+      }
+    };
+    safeBar();
+    this._musicTimer = setInterval(safeBar, 5400);
   }
 
   stopMusic() {
