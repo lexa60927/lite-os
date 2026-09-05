@@ -5,7 +5,7 @@
  */
 import { BLOCKS } from '../src/engine/blocks.js';
 import { buildTiles } from '../src/engine/tiles.js';
-import { packAtlas, TILE, GRID, CELL } from '../src/engine/pixels.js';
+import { packAtlas, TILE, GRID, CELL, PAD } from '../src/engine/pixels.js';
 
 const { tiles, index } = buildTiles();
 const packed = packAtlas(tiles);
@@ -18,6 +18,10 @@ const names = tiles.map((t) => t.name);
 if (new Set(names).size !== names.length) bad('дубли имён тайлов: ' + names.filter((n, i) => names.indexOf(n) !== i).join(', '));
 if (tiles.length > GRID * GRID) bad(`атлас ${tiles.length} тайлов не влезает в сетку ${GRID}×${GRID}`);
 if (packed.width !== GRID * CELL) bad(`размер атласа ${packed.width} вместо ${GRID * CELL} (сетка ${GRID}, ячейка ${CELL})`);
+// атлас обязан быть степенью двойки: иначе mipmap недопустим (NPOT) и текстуры
+// в дальних чанках снова станут рябыми или чёрными
+if ((packed.width & (packed.width - 1)) !== 0) bad(`атлас ${packed.width}px не является степенью двойки — mipmap нелегален`);
+if (PAD * 2 < 8) bad(`кровоток ${PAD}px мал для mipmap: соседние тайлы подмешаются на дальних уровнях`);
 console.log(`✔ атлас: ${tiles.length} тайлов ${packed.width}×${packed.height}, сетка ${GRID}×${GRID}, тайл ${TILE}px`);
 
 // 2. каждый тайл непустой (не все пиксели одинаковые) и без NaN

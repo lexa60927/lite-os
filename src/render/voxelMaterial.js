@@ -106,6 +106,8 @@ export function createVoxelMaterials(atlas) {
 
   return {
     uniforms: shared,
+    // 0.4, а не 0.5: с mipmaps на дальних мип-уровнях листва усредняется до
+    // alpha ~0.5, и при 0.5 кроны просто исчезали бы за горизонтом прорисовки.
     solid: make({ wave: false, alpha: 1, alphaTest: 0.4, transparent: false }),
     water: make({ wave: true, alpha: 0.76, alphaTest: 0.02, transparent: true }),
   };
