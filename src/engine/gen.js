@@ -19,9 +19,25 @@ const B = {
   diamond: byKey('diamond_ore'), redstone: byKey('redstone_ore'), cactus: byKey('cactus'),
   tall_grass: byKey('tall_grass'), fern: byKey('fern'), flower_red: byKey('flower_red'),
   flower_yellow: byKey('flower_yellow'),
+  planks: byKey('planks'), glass: byKey('glass'), torch: byKey('torch'),
+  glowstone: byKey('glowstone'), cobblestone: byKey('cobblestone'), stone_bricks: byKey('stone_bricks'),
+  farmland: byKey('farmland'), wheat: byKey('wheat'), hay_block: byKey('hay_block'),
 };
 
 export const BIOME = { OCEAN: 0, BEACH: 1, PLAINS: 2, FOREST: 3, DESERT: 4, SNOWY: 5, MOUNTAIN: 6, SAVANNA: 7, SWAMP: 8, TAIGA: 9 };
+
+/* --- деревни ---------------------------------------------------------------
+ * Регион 96×96 блоков может содержать деревню: сетка 3×3 по 32 блока,
+ * улицы между клетками, в центре площадь с колодцем и фонарями. Всё считается
+ * из сида, поэтому любой чанк достраивается независимо и одинаково с обеих
+ * сторон границы — как деревья.
+ */
+const V_CELL = 32;
+const V_HALF = V_CELL * 1.5;               // 48 — половина стороны деревни
+const V_IN = 12;                           // застройка клетки: |lx| <= V_IN, дорога 13..15
+const V_BIOMES = [BIOME.PLAINS, BIOME.SAVANNA, BIOME.DESERT, BIOME.TAIGA, BIOME.SNOWY];
+const V_PROBE = [[0, 0], [38, 0], [-38, 0], [0, 38], [0, -38], [26, 26], [-26, -26], [26, -26], [-26, 26]];
+
 export const DEFAULT_SEED = 42;
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -59,6 +75,8 @@ export class Terrain {
     this.or = new Noise(this.seed ^ 0x7feb352d);
     /** Мемо на колонку: height/climate/biome/tree считаем один раз за генерацию чанка. */
     this.cache = new Map();
+    /** Мемо «регион → деревня»: планировка считается один раз на регион. */
+    this._villages = new Map();
   }
 
   /** Климат: [temperature, humidity] в 0..1 */
@@ -142,7 +160,164 @@ export class Terrain {
   }
 
   /** Есть ли в этой колонне дерево; возвращает описание или null. */
+  /** Деревня, если регион (rx, rz) ей подходит; иначе null. Мемоизируется. */
+  villageSite(rx, rz) {
+    const mk = rx + ',' + rz;
+    if (this._villages.has(mk)) return this._villages.get(mk);
+    const site = this.#makeVillage(rx, rz);
+    if (this._villages.size > 8192) this._villages.clear();
+    this._villages.set(mk, site);
+    return site;
+  }
+
+  #makeVillage(rx, rz) {
+    if (hash2(rx * 3 + 1, rz * 7 + 5, (this.seed ^ 0x51a31f) >>> 0) < 0.72) return null;
+    const jx = Math.round((hash2(rx + 11, rz - 3, (this.seed + 91) >>> 0) - 0.5) * 14);
+    const jz = Math.round((hash2(rx - 7, rz + 17, (this.seed + 441) >>> 0) - 0.5) * 14);
+    const cx = rx * V_CELL * 3 + V_CELL * 1.5 + jx;
+    const cz = rz * V_CELL * 3 + V_CELL * 1.5 + jz;
+    const c0 = this.col(cx, cz);
+    if (!V_BIOMES.includes(c0.biome)) return null;
+    let minH = 255, maxH = 0;
+    for (const [dx, dz] of V_PROBE) {
+      const c = this.col(cx + dx, cz + dz);
+      if (!V_BIOMES.includes(c.biome)) return null;
+      if (c.h < minH) minH = c.h;
+      if (c.h > maxH) maxH = c.h;
+    }
+    if (maxH - minH > 6 || minH <= SEA + 1) return null;
+    const h = Math.max(SEA + 2, Math.round((minH + maxH) / 2));
+    const desert = c0.biome === BIOME.DESERT;
+    const cold = c0.biome === BIOME.SNOWY || c0.biome === BIOME.TAIGA;
+    const cells = [];
+    for (let cj = 0; cj < 3; cj++) {
+      for (let ci = 0; ci < 3; ci++) {
+        if (ci === 1 && cj === 1) { cells.push({ kind: 'plaza' }); continue; }
+        const r = hash2(rx * 97 + ci * 13 + 5, rz * 61 + cj * 29 + 7, (this.seed + ci * 31 + cj * 733) >>> 0);
+        const kind = r < 0.56 ? 'house' : r < 0.78 ? 'farm' : 'yard';
+        const rr = hash2(ci * 7 + rz, cj * 11 + rx, (this.seed + 17) >>> 0);
+        cells.push({
+          kind,
+          w: 9 + (rr > 0.55 ? 3 : 0) + (rr > 0.86 ? 2 : 0),
+          l: 9 + (rr > 0.35 && rr <= 0.6 ? 3 : 0),
+          tall: rr > 0.72,
+        });
+      }
+    }
+    if (!cells.some((c) => c.kind === 'house')) cells[0] = { ...cells[0], kind: 'house', w: 9, l: 9, tall: false };
+    return { cx, cz, h, biome: c0.biome, desert, cold, cells, top: desert ? B.sand : cold && c0.biome === BIOME.SNOWY ? B.snow : B.grass };
+  }
+
+  /** Принадлежит ли колонка территории деревни (для подавления деревьев и спавна мобов). */
+  villageAt(x, z) {
+    const rx = Math.floor(x / (V_CELL * 3));
+    const rz = Math.floor(z / (V_CELL * 3));
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const site = this.villageSite(rx + dx, rz + dz);
+        if (!site) continue;
+        const ddx = x - site.cx, ddz = z - site.cz;
+        if (Math.abs(ddx) <= V_HALF && Math.abs(ddz) <= V_HALF) return site;
+      }
+    }
+    return null;
+  }
+
+  /** Деревенская планировка для смещения от центра (null — улица/пусто). */
+  #cellAt(site, dx, dz) {
+    const ci = Math.floor((dx + V_HALF) / V_CELL), cj = Math.floor((dz + V_HALF) / V_CELL);
+    if (ci < 0 || cj < 0 || ci > 2 || cj > 2) return null;
+    return { site, ci, cj, lx: dx - (ci - 1) * V_CELL, lz: dz - (cj - 1) * V_CELL, cell: site.cells[cj * 3 + ci] };
+  }
+
+  /** Застройка деревни: возвращает массив [y, id] для колонки или null. */
+  villageColumn(ctx) {
+    const { site, cell, ci, cj, lx, lz } = ctx;
+    const h = site.h;
+    const out = [];
+    const road = Math.abs(lx) > V_IN || Math.abs(lz) > V_IN;
+    const inPlaza = cell.kind === 'plaza';
+    const put = (y, id) => { if (y >= 0 && y < HEIGHT) out.push([y, id]); };
+
+    if (road) {                                        // улицы: гравий, в пустыне — песчаник
+      put(h, site.desert ? B.sandstone : B.gravel);
+      return out;
+    }
+    if (inPlaza) {
+      const d = Math.max(Math.abs(lx), Math.abs(lz));
+      if (d <= 1) { put(h, B.cobblestone); put(h + 1, B.water); }       // колодец
+      else if (d === 2) { put(h, B.cobblestone); put(h + 1, B.stone_bricks); }
+      else if (Math.abs(lx) === 9 && Math.abs(lz) === 9) {               // фонарные столбы по углам
+        for (let y = h + 1; y <= h + 3; y++) put(y, B.log);
+        put(h + 4, B.glowstone);
+        put(h, B.cobblestone);
+      } else if (d <= 7) put(h, B.stone_bricks);                         // только сама площадь, остальное — луга
+      return out;
+    }
+
+    const hw = cell.w >> 1, hl = cell.l >> 1;
+    if (cell.kind === 'house') {
+      const u = lx + hw, v = lz + hl;                  // 0..w-1 / 0..l-1
+      const inside = u >= 0 && v >= 0 && u < cell.w && v < cell.l;
+      const wallH = cell.tall ? 5 : 4;
+      const roofY = h + 2 + wallH;                 // крыша на блок выше стен — с парапетом
+      const eave = roofY - 1;
+      if (!inside) {
+        const near = Math.abs(lx) <= hw + 1 && Math.abs(lz) <= hl + 1;
+        if (near) put(eave, B.planks);             // свес карниза
+        return out;
+      }
+      const edge = u === 0 || v === 0 || u === cell.w - 1 || v === cell.l - 1;
+      const wall = site.desert ? B.sandstone : site.cold ? B.cobblestone : B.planks;
+      const frame = B.log;
+      if (edge) {
+        const corner = (u === 0 || u === cell.w - 1) && (v === 0 || v === cell.l - 1);
+        const midU = u === hw, midV = v === hl;
+        const doorSide = (ci < 1 && u === cell.w - 1) || (ci > 1 && u === 0)
+          || (cj < 1 && v === cell.l - 1) || (cj > 1 && v === 0);
+        const doorCell = doorSide && ((ci !== 1 ? midV : midU));
+        for (let y = h + 1; y <= h + wallH; y++) {
+          if (doorCell && (y === h + 1 || y === h + 2)) { put(y, 0); continue; }
+          put(y, corner || y === h + wallH ? frame : wall);
+        }
+        // окна в середине стен
+        if (!doorCell && (ci !== 1 ? midV : midU)) { put(h + 3, B.glass); put(h + 2, B.glass); }
+        put(h, site.desert ? B.sand : B.cobblestone);
+        if (doorCell) put(h + 3, B.log);                  // притолока
+      } else {
+        put(h, B.planks);                                 // пол
+        const rim = u === 0 || v === 0 || u === cell.w - 1 || v === cell.l - 1;
+        for (let y = h + 1; y < eave; y++) put(y, 0);     // пустая комната
+        put(eave, B.planks);                               // перекрытие
+        put(roofY, rim ? B.planks : 0);                    // парапет по краю
+        if (u === hw && v === hl) put(roofY, B.log);       // конёк
+        if (u === 1 && v === 1) for (let y = h + 1; y <= roofY + 1; y++) put(y, B.cobblestone);   // труба
+        if (u === hw && v === hl && cell.tall) put(roofY + 1, B.glowstone);   // фонарь на коньке
+      }
+      return out;
+    }
+
+    if (cell.kind === 'farm') {
+      const inField = Math.abs(lx) <= 8 && Math.abs(lz) <= 6;
+      const pond = Math.abs(lx - 9) <= 1 && Math.abs(lz + 5) <= 1;
+      if (pond) { put(h, B.water); return out; }
+      if (Math.abs(lx) === 10 || Math.abs(lz) === 8) { put(h + 1, B.log); return out; }   // изгородь
+      if (!inField) return out;
+      const row = ((lz + 6) % 2) === 0;
+      put(h, row ? B.farmland : B.dirt);
+      if (row) put(h + 1, B.wheat);
+      if (Math.abs(lx + 9) <= 1 && Math.abs(lz - 6) <= 1) { put(h + 1, B.hay_block); if (lx === -9 && lz === 6) put(h + 2, B.hay_block); }
+      return out;
+    }
+
+    // двор: сено, пара столбов, остальное — обычная трава (декор добавится ниже)
+    if ((Math.abs(lx) === 4 && Math.abs(lz) === 4) && ((lx + lz) & 2) === 0) put(h + 1, B.hay_block);
+    if (Math.abs(lx) === 7 && Math.abs(lz) === 1) { put(h + 1, B.log); put(h + 2, B.log); }
+    return out;
+  }
+
   treeAt(x, z) {
+    if (this.villageAt(x, z)) return null;        // в деревнях деревьев нет: кроны прорастали бы через крыши
     const r = hash2(x, z, this.seed ^ 0x5bd1e995);
     const c = this.col(x, z);
     const biome = c.biome;
@@ -234,6 +409,7 @@ export class Terrain {
     const biomes = chunk.biomes;
     blocks.fill(0);
     let solid = 0;
+    let hmax = 0;                  // верхняя занятая клетка — см. mesher (yTop)
 
     for (let lz = 0; lz < CHUNK; lz++) {
       for (let lx = 0; lx < CHUNK; lx++) {
@@ -244,6 +420,7 @@ export class Terrain {
         const biome = c.biome;
         const temp = c.temp;
         heights[lz * CHUNK + lx] = h;
+        if (h > hmax) hmax = h;
         biomes[lz * CHUNK + lx] = biome;
 
         let oreCell = -1;
@@ -280,6 +457,39 @@ export class Terrain {
         // вода выше рельефа (на болоте — на блок-два выше уровня моря)
         const waterTop = swamp ? SEA + 1 : SEA;
         for (let y = h + 1; y <= waterTop; y++) blocks[idx(lx, y, lz)] = B.water;
+        if (waterTop > hmax) hmax = waterTop;
+      }
+    }
+
+    // --- деревни: планировка участка и застройка (пишем поверх рельефа) ---
+    for (let lz = 0; lz < CHUNK; lz++) {
+      for (let lx = 0; lx < CHUNK; lx++) {
+        const x = cx * CHUNK + lx, z = cz * CHUNK + lz;
+        const site = this.villageAt(x, z);
+        if (!site) continue;
+        const ctx = this.#cellAt(site, x - site.cx, z - site.cz);
+        if (!ctx) continue;
+        const rows = this.villageColumn(ctx);
+        const th = heights[lz * CHUNK + lx];
+        let top = site.h;
+        // пещера, съевшая поверхность, не должна оставлять дом над провалом
+        if (!blocks[idx(lx, site.h, lz)]) {
+          let from = site.h;
+          while (from > 0 && !blocks[idx(lx, from - 1, lz)] && site.h - from < 10) from--;
+          for (let y = site.h; y >= from; y--) blocks[idx(lx, y, lz)] = y === site.h ? site.top : B.dirt;
+        }
+        if (th < site.h) {
+          for (let y = th + 1; y <= site.h; y++) blocks[idx(lx, y, lz)] = y === site.h ? site.top : B.dirt;
+        } else if (th > site.h) {
+          for (let y = site.h + 1; y <= th; y++) blocks[idx(lx, y, lz)] = 0;
+          blocks[idx(lx, site.h, lz)] = site.top;
+        }
+        for (const [y, id] of rows) {
+          blocks[idx(lx, y, lz)] = id;
+          if (id !== 0 && y > top) top = y;
+          if (y + 1 > hmax) hmax = y + 1;
+        }
+        heights[lz * CHUNK + lx] = Math.min(HEIGHT - 1, top);
       }
     }
 
@@ -300,6 +510,7 @@ export class Terrain {
           if (id === B.leaves ? cur === 0 || cur === B.tall_grass : true) {
             if (id === B.log) blocks[i] = id;
             else if (cur === 0) { blocks[i] = id; solid++; }
+            if (y + 1 > hmax) hmax = y + 1;
           }
         }
       }
@@ -320,12 +531,14 @@ export class Terrain {
         const bcol = this.col(x, z).biome;
         const forest = bcol === BIOME.FOREST || bcol === BIOME.SWAMP;
         const savanna = bcol === BIOME.SAVANNA;
+        if (h + 1 > hmax) hmax = h + 1;
         if (r < (forest ? 0.22 : savanna ? 0.3 : 0.13)) blocks[above] = B.tall_grass;
         else if (r < (forest ? 0.28 : 0.16)) blocks[above] = B.fern;
         else if (r > 0.955) blocks[above] = B.flower_red;
         else if (r > 0.935) blocks[above] = B.flower_yellow;
       }
     }
+    chunk.hmax = Math.min(HEIGHT - 1, hmax);
     return solid;
   }
 }

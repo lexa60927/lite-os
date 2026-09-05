@@ -972,6 +972,18 @@ export class Game {
     this.camera.near = under ? 0.05 : 0.08;
     this.camera.updateProjectionMatrix();
 
+    // деревня: игрок должен замечать, что дошёл до поселения
+    this.villageT = (this.villageT ?? 1) - dt;
+    if (this.villageT <= 0) {
+      this.villageT = 1.2;
+      const pl = this.player;
+      const here = !!pl && !!this.state.world?.terrain.villageAt(Math.floor(pl.x), Math.floor(pl.z));
+      if (here !== this.inVillage) {
+        this.inVillage = here;
+        if (here) this.hud.toast('Деревня: здесь светло, враги не спавнятся. Жители носят изумруды', '');
+      }
+    }
+
     // автосохранение и отладка
     if (st.saveT > 0) {
       st.saveT -= dt;
@@ -990,7 +1002,7 @@ export class Game {
     const dir = this.player.forward({});
     const mob = this.mobs.pick(cam.position.x, cam.position.y, cam.position.z, dir.x, dir.y, dir.z, 4.4);
     st.mobTarget = mob;
-    if (mob) this.target.hide();
+    if (mob) this.target.show(null);          // рамка блока мешает прицелу по мобу
     if (!mob || !this.input.mine || this.attackCd > 0 || st.paused || this.inventoryOpen) return;
     this.attackCd = 0.42;
     const dmg = damageOf(this.inv.hot[this.inv.sel]);
@@ -1036,7 +1048,7 @@ export class Game {
       `LiteCraft · ${this.state.fps.toFixed(0)} FPS · ${this.state.ms.toFixed(1)} мс`,
       `XYZ ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}  чанк ${cx},${cz}  блок ${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`,
       `биом: ${biome}  ·  время ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}  ·  свет ${(sky.day * 15) | 0}/15`,
-      `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount}`,
+      `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount} · стриминг ${cv?.stats.ms?.toFixed(1) ?? 0} мс/кадр (${cv?.stats.frameMs?.toFixed(1) ?? '—'} мс кадр)${this.inVillage ? ' · деревня' : ''}`,
       `режим: ${p.flying ? 'полёт' : p.sprinting ? 'бег' : 'ходок'} · HP ${this.state.hp / 2} · ${this.inv.creative ? 'творчество' : 'выживание'} · сид ${this.state.seed}`,
       `мобов вокруг: ${this.mobs.count} (видно ${this.mobs.nearCount(p, 48)}) · убито: ${this.mobs.kills} · в руке: ${BLOCKS[this.inv.hot[this.inv.sel]]?.name ?? '—'} ×${this.inv.creative ? '∞' : this.inv.hotN[this.inv.sel]}`,
       `${p.headInWater ? 'под водой' : p.inWater ? 'в воде' : 'на суше'}${p.onGround ? ' · на земле' : ''} · E — инвентарь, F3 — вкл/выкл панели`,

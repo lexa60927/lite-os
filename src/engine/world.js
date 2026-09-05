@@ -18,8 +18,11 @@ class Chunk {
     this.emitters = [];
     this.generated = false;
     this.needsMesh = true;
+    this.hmax = 0;              // самая верхняя занятая клетка: меш не нужно строить до HEIGHT
   }
 }
+
+const NEIGH = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 export class World {
   constructor(seed = DEFAULT_SEED) {
@@ -60,6 +63,16 @@ export class World {
     c.needsMesh = true;
     this.stats.generated++;
     this.dirtyLight.add(k);
+    // Новорождённый чанк обязан попасть в очередь меширования. Раньше сюда
+    // добавлялись только правки блоков (touch), поэтому чанк оставался
+    // невидимым, пока в нём не сломаешь блок, — «копаю пустоту, и чанк появляется».
+    this.dirtyMesh.add(k);
+    // соседи тоже: их грани на стыке были открыты в пустоту, теперь их надо закрыть
+    for (const [dx, dz] of NEIGH) {
+      const nk = this.key(cx + dx, cz + dz);
+      const n = this.chunks.get(nk);
+      if (n) { n.needsMesh = true; this.dirtyMesh.add(nk); }
+    }
     return c;
   }
 
@@ -78,6 +91,7 @@ export class World {
         const lz = z - oz;
         if (lx < 0 || lz < 0 || lx >= CHUNK || lz >= CHUNK || y < 0 || y >= HEIGHT) continue;
         chunk.blocks[idx(lx, y, lz)] = id;
+        if (y + 1 > chunk.hmax) chunk.hmax = y + 1;
       }
       return;
     }
@@ -85,7 +99,10 @@ export class World {
       for (let lx = 0; lx < CHUNK; lx++) {
         for (let y = 0; y < HEIGHT; y++) {
           const id = this.edits.get(blockKey(ox + lx, y, oz + lz));
-          if (id !== undefined) chunk.blocks[idx(lx, y, lz)] = id;
+          if (id !== undefined) {
+            chunk.blocks[idx(lx, y, lz)] = id;
+            if (y + 1 > chunk.hmax) chunk.hmax = y + 1;
+          }
         }
       }
     }
@@ -165,7 +182,7 @@ export class World {
       if (orig === id) this.edits.delete(key);
       else this.edits.set(key, id);
     }
-    this.touch(chunk, lx, lz);
+    this.touch(chunk, lx, lz, y);
     return true;
   }
 
@@ -200,8 +217,9 @@ export class World {
     chunk.skyH[lz * CHUNK + lx] = h;
   }
 
-  touch(chunk, lx, lz) {
+  touch(chunk, lx, lz, y) {
     const k = this.key(chunk.cx, chunk.cz);
+    if (y !== undefined && y + 1 > chunk.hmax) chunk.hmax = y + 1;
     this.dirtyMesh.add(k);
     this.dirtyLight.add(k);
     if (lx === 0) this.markNeighbor(chunk.cx - 1, chunk.cz);

@@ -6,6 +6,8 @@
  * tint(3) — оттенок биома (трава/листва/вода), по умолчанию белый.
  */
 import { CHUNK, HEIGHT, idx } from './constants.js';
+
+const SEA_TOP = 38;              // вода/болотная вода живут ниже этого — не режем
 import { BLOCKS } from './blocks.js';
 import { OPAQUE, RENDER, HIDE_SAME, CUTOUT, FULL_BRIGHT, LIGHT, INSET, TINTED, WATER_TINT, R_CUBE, R_LIQUID, R_CROSS, R_TORCH } from './props.js';
 import { BIOME_TINT, BIOME_WATER_TINT } from './gen.js';
@@ -189,7 +191,13 @@ export function buildChunkMesh(world, chunk, atlas) {
   const uv0 = [0, 0], uv1 = [0, 0], uv2 = [0, 0], uv3 = [0, 0];
   const li0 = [0, 0, 0], li1 = [0, 0, 0], li2 = [0, 0, 0], li3 = [0, 0, 0];
 
-  for (let ly = 0; ly < HEIGHT; ly++) {
+  // Строим только до самой верхней занятой клетки (плюс запас на кросс-блоки и
+  // воду): полный перебор HEIGHT клеток в чанке — это ~40% времени меширования
+  // впустую, из-за него стриминг не влезал в кадр.
+  // hmax === 0 значит «данных нет» (чанк собрали вручную, без generate) — тогда
+  // сканируем столбцы целиком, чтобы никаких блоков не потерялось
+  const yTop = !chunk.hmax ? HEIGHT : Math.min(HEIGHT, Math.max(chunk.hmax + 2, SEA_TOP));
+  for (let ly = 0; ly < yTop; ly++) {
     for (let lz = 0; lz < CH; lz++) {
       const rowBase = (ly * CH + lz) * CH;
       for (let lx = 0; lx < CH; lx++) {

@@ -26,6 +26,13 @@ const TOOL_TIERS = [
   { tier: 'iron', fem: 'железная', masc: 'железный', speed: 5.6, damage: 5, uses: 251 },
   { tier: 'diamond', fem: 'алмазная', masc: 'алмазный', speed: 8.2, damage: 7, uses: 601 },
 ];
+const VILLAGE_DEFS = [
+  { id: 59, name: 'Грядка', key: 'farmland', tiles: { top: 'farmland', bottom: 'dirt', side: 'dirt' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.4, sound: 'sand', drops: 'dirt' },
+  { id: 60, name: 'Пшеница', key: 'wheat', tiles: { all: 'wheat' }, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, fullBright: true },
+  { id: 61, name: 'Стог сена', key: 'hay_block', tiles: { top: 'hay_top', bottom: 'hay_top', side: 'hay_side' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.5, sound: 'grass' },
+  { id: 62, name: 'Изумруд', key: 'emerald', tiles: { all: 'item_emerald' }, render: 'item', sound: 'soft' },
+];
+
 const TOOL_DEFS = [];
 {
   let id = 43;
@@ -98,6 +105,10 @@ export const BLOCKS = [
   { id: 37, name: 'Подзол', key: 'podzol', tiles: { top: 'podzol', bottom: 'dirt', side: 'podzol_side' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.5, sound: 'dirt' },
   ...ITEM_DEFS,
   ...TOOL_DEFS,
+  // --- деревни (59+): их ставит генератор, в творческом инвентаре доступны.
+  // ВАЖНО: BLOCKS индексируется по id, поэтому новые блоки — только в конце
+  // и с id, равным числу предыдущих записей (иначе BLOCKS[id] читает чужой def).
+  ...VILLAGE_DEFS,
 ];
 
 export const BY_KEY = new Map(BLOCKS.map((b) => [b.key, b]));

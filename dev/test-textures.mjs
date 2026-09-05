@@ -16,6 +16,11 @@ const bad = (msg) => { console.log('✘ ' + msg); fail++; };
 // 1. все имена тайлов атласа уникальны и лежат в сетке целиком
 const names = tiles.map((t) => t.name);
 if (new Set(names).size !== names.length) bad('дубли имён тайлов: ' + names.filter((n, i) => names.indexOf(n) !== i).join(', '));
+// BLOCKS индексируется по id: расхождение молча подменяет def чужим
+BLOCKS.forEach((d, i) => { if (d && d.id !== i) bad(`BLOCKS[${i}].id = ${d.id} — массив рассинхронизирован с id`); });
+const maxId = BLOCKS.reduce((m, d) => Math.max(m, d?.id ?? 0), 0);
+if (BLOCKS.length !== maxId + 1) bad(`BLOCKS.length ${BLOCKS.length} ≠ maxId+1 ${maxId + 1}`);
+
 if (tiles.length > GRID * GRID) bad(`атлас ${tiles.length} тайлов не влезает в сетку ${GRID}×${GRID}`);
 if (packed.width !== GRID * CELL) bad(`размер атласа ${packed.width} вместо ${GRID * CELL} (сетка ${GRID}, ячейка ${CELL})`);
 // атлас обязан быть степенью двойки: иначе mipmap недопустим (NPOT) и текстуры

@@ -3,7 +3,10 @@
  * перестройка только изменённых чанков, выгрузка далёких.
  */
 import * as THREE from 'three';
-import { CHUNK, chunkKey, decodeChunkKey } from '../engine/constants.js';
+import { CHUNK, HEIGHT, chunkKey, decodeChunkKey } from '../engine/constants.js';
+
+const neighborsReady = (world, cx, cz) => !!world.getChunk(cx + 1, cz) && !!world.getChunk(cx - 1, cz)
+  && !!world.getChunk(cx, cz + 1) && !!world.getChunk(cx, cz - 1);
 import { buildChunkMesh } from '../engine/mesher.js';
 
 export class ChunkView {
@@ -14,10 +17,14 @@ export class ChunkView {
     this.atlas = atlas;
     this.objects = new Map();     // world key -> { solid, water }
     this.renderDistance = 10;
-    this.genBudget = 9;           // мс на кадр
-    this.meshBudget = 8;
+    // Один общий бюджет на весь стриминг (генерация + свет + меши). Раньше
+    // лимиты складывались: 9 + 2.5 + 8 = до 19.5 мс в кадре при планке 16.7 мс,
+    // т.е. каждый второй кадр гарантированно пропускался — «мир подлагивает».
+    this.streamBudget = 6;
+    this._frameMs = 16.7;
+    this._last = 0;
     this._candidates = [];
-    this.stats = { gen: 0, mesh: 0, quads: 0, pending: 0 };
+    this.stats = { gen: 0, mesh: 0, quads: 0, pending: 0, ms: 0 };
   }
 
   static key(cx, cz) { return chunkKey(cx, cz); }
@@ -37,10 +44,22 @@ export class ChunkView {
     const ax = Math.max(-2, Math.min(2, Math.round((vx * 1.1) / CHUNK)));
     const az = Math.max(-2, Math.min(2, Math.round((vz * 1.1) / CHUNK)));
     const fcx = pcx + ax, fcz = pcz + az;
-    // после телепорта/быстрого полёта очередь большая — временно тратим больше кадра
-    const boost = world.dirtyMesh.size > 20 ? 2 : 1;
-
-    let t0 = performance.now();
+    const backlog = world.dirtyMesh.size;
+    // Сглаженное время кадра: если мы и так не успеваем —工作 не раздуваем, а
+    // ужимаем; если в кадре есть запас и очередь большая — догоняем.
+    const now = performance.now();
+    if (this._last) {
+      const ft = Math.min(250, now - this._last);
+      this._frameMs += (ft - this._frameMs) * 0.15;
+    }
+    this._last = now;
+    let pool = this.streamBudget;
+    if (this._frameMs > 20) pool *= 0.4;
+    else if (this._frameMs < 13 && backlog > 8) pool *= 1.4;
+    const deadline = now + pool;
+    // пока очередь меширования длинная, генерация уступает ей время (иначе
+    // новые чанки приходят быстрее, чем успевают стать геометрией)
+    const genEnd = now + pool * (backlog > 24 ? 0.15 : 0.5);
     let gen = 0;
     // 1. генерация кольцами от «фокуса» (на один дальше, чем радиус меширования)
     outer:
@@ -49,7 +68,14 @@ export class ChunkView {
         for (let dx = -ring; dx <= ring; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
           const cx = fcx + dx, cz = fcz + dz;
-          if (!world.getChunk(cx, cz)) {
+          const here = world.getChunk(cx, cz);
+          if (here) {
+            // чанк уже есть, но меша у него нет (появился, пока был вне радиуса,
+            // или его тронула правка соседа). В очередь кладём только когда все
+            // соседи на месте: иначе он вечно прыгал бы там и сюда
+            if (here.needsMesh && neighborsReady(world, cx, cz)) world.dirtyMesh.add(ChunkView.key(cx, cz));
+          }
+          if (!here) {
             try {
               world.ensureChunk(cx, cz);
             } catch (e) {
@@ -57,33 +83,37 @@ export class ChunkView {
               continue;
             }
             gen++;
-            if (performance.now() - t0 > this.genBudget * boost) break outer;
+            if (performance.now() >= genEnd) break outer;
           }
         }
       }
     }
 
     // 2. свет
-    t0 = performance.now();
+    const lightEnd = Math.min(deadline, performance.now() + pool * 0.2);
     if (world.dirtyLight.size) {
       for (const k of [...world.dirtyLight]) {
         const [cx, cz] = decodeChunkKey(k);
         const c = world.getChunk(cx, cz);
         if (c) world.recomputeLight(c);
         world.dirtyLight.delete(k);
-        if (performance.now() - t0 > 2.5) break;
+        if (performance.now() >= lightEnd) break;
       }
     }
 
     // 3. меширование «грязных» чанков по близости к игроку
-    t0 = performance.now();
     let meshed = 0;
     const ready = [];
     for (const k of world.dirtyMesh) {
       const [cx, cz] = decodeChunkKey(k);
+      // за пределами кольца не мешим совсем: очередь без этой чистки расползалась
+      // на сотни чанков, сортировалась каждый кадр и не рассасывалась никогда
+      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > R + 1) { world.dirtyMesh.delete(k); continue; }
       const c = world.getChunk(cx, cz);
       if (!c) { world.dirtyMesh.delete(k); continue; }
-      if (!world.getChunk(cx + 1, cz) || !world.getChunk(cx - 1, cz) || !world.getChunk(cx, cz + 1) || !world.getChunk(cx, cz - 1)) continue;
+      // соседей нет — грани считать рано; needsMesh оставляем, кольцевой обход
+      // вернёт чанк в очередь, как только он станет готов
+      if (!neighborsReady(world, cx, cz)) { world.dirtyMesh.delete(k); continue; }
       ready.push([((cx - fcx) ** 2 + (cz - fcz) ** 2), cx, cz]);
     }
     ready.sort((a, b) => a[0] - b[0]);
@@ -97,11 +127,13 @@ export class ChunkView {
       }
       world.dirtyMesh.delete(ChunkView.key(cx, cz));
       meshed++;
-      if (performance.now() - t0 > this.meshBudget * boost) break;
+      if (performance.now() >= deadline) break;
     }
     this.stats.gen = gen;
     this.stats.mesh = meshed;
     this.stats.pending = world.dirtyMesh.size;
+    this.stats.ms = performance.now() - now;
+    this.stats.frameMs = this._frameMs;
 
     // 4. выгрузка (гистерезис: чанки упреждения не выбрасываем в том же кадре)
     const keep = R + 3;
@@ -144,19 +176,42 @@ export class ChunkView {
       if (mesh) { this.scene.remove(mesh); mesh.geometry.dispose(); }
       return null;
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(data.position, 3));
-    geo.setAttribute('uv', new THREE.BufferAttribute(data.uv, 2));
-    geo.setAttribute('light', new THREE.BufferAttribute(data.light, 4));
-    geo.setAttribute('tint', new THREE.BufferAttribute(data.tint, 3));
-    geo.setIndex(new THREE.BufferAttribute(data.index, 1));
-    geo.computeBoundingSphere();
-    geo.computeBoundingBox();
-    if (mesh) {
-      mesh.geometry.dispose();
-      mesh.geometry = geo;
-      return mesh;
+    let geo = mesh ? mesh.geometry : null;
+    if (!geo) {
+      geo = new THREE.BufferGeometry();
+      // сфера ограничивающая — по размеру чанка целиком: пересчитывать её по
+      // всем вершинам на каждую правку дорого, а bounds у чанка постоянны
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(CHUNK / 2, HEIGHT / 2, CHUNK / 2),
+        Math.sqrt((CHUNK / 2) ** 2 * 2 + (HEIGHT / 2) ** 2));
+      geo.boundingBox = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(CHUNK, HEIGHT, CHUNK));
     }
+    const put = (name, arr, size) => {
+      const prev = geo.getAttribute(name);
+      if (prev && prev.array.length >= arr.length) {
+        prev.array.set(arr);
+        prev.needsUpdate = true;
+        return;
+      }
+      const attr = new THREE.BufferAttribute(arr, size);
+      attr.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute(name, attr);
+    };
+    put('position', data.position, 3);
+    put('uv', data.uv, 2);
+    put('light', data.light, 4);
+    put('tint', data.tint, 3);
+    const idxPrev = geo.getIndex();
+    if (idxPrev && idxPrev.array.length >= data.index.length) {
+      idxPrev.array.set(data.index);
+      idxPrev.needsUpdate = true;
+    } else {
+      const attr = new THREE.BufferAttribute(data.index, 1);
+      attr.setUsage(THREE.DynamicDrawUsage);
+      geo.setIndex(attr);
+    }
+    // буферы могут быть длиннее (переиспользованы) — рисуем ровно столько, сколько квадов
+    geo.setDrawRange(0, data.index.length);
+    if (mesh) { mesh.geometry = geo; return mesh; }
     const m = new THREE.Mesh(geo, material);
     m.position.set(cx * CHUNK, 0, cz * CHUNK);
     m.matrixAutoUpdate = false;

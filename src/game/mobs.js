@@ -62,6 +62,20 @@ export const MOB_TYPES = {
       { p: [0.14, -0.42, 0], s: [0.2, 0.7, 0.2], tile: 'mob_husk', shade: 0.72, limb: 1 },
     ],
   },
+  villager: {
+    name: 'Житель', hp: 20, w: 0.7, h: 1.9, speed: 1.0, passive: true, aggro: 0, villageOnly: true,
+    drops: () => [{ id: byKey('emerald'), n: 1 }],
+    parts: [
+      { p: [0, 0.05, 0.02], s: [0.66, 1.1, 0.46], tile: 'mob_villager', shade: 1 },
+      { p: [0, 0.62, 0], s: [0.52, 0.5, 0.52], tile: 'mob_villager_face', shade: 0.98 },
+      { p: [0, 0.58, -0.3], s: [0.2, 0.22, 0.16], tile: 'mob_villager_face', shade: 1.12 },
+      { p: [-0.4, 0.12, 0.02], s: [0.16, 0.74, 0.22], tile: 'mob_villager', shade: 0.78, limb: 1 },
+      { p: [0.4, 0.12, 0.02], s: [0.16, 0.74, 0.22], tile: 'mob_villager', shade: 0.78, limb: 1 },
+      { p: [-0.16, -0.62, 0.02], s: [0.24, 0.55, 0.26], tile: 'mob_villager', shade: 0.64, limb: 1 },
+      { p: [0.16, -0.62, 0.02], s: [0.24, 0.55, 0.26], tile: 'mob_villager', shade: 0.64, limb: 1 },
+    ],
+  },
+
   crawler: {
     name: 'Пещерник', hp: 12, w: 0.95, h: 0.75, speed: 3.1, hostile: true, damage: 2,
     reach: 1.6, aggro: 13, jumps: true, darkOnly: true,
@@ -215,8 +229,9 @@ export class Mobs {
   }
 
   /** Подходящий ли это моб для данного места/времени. */
-  #allowed(def, night, light, y) {
-    if (def.hostile) return night || light < 6;
+  #allowed(def, night, light, y, inVillage = false) {
+    if (def.villageOnly) return inVillage;             // жители живут только в деревнях
+    if (def.hostile && inVillage) return false;        // в деревнях не спавнятся: площадь освещена и безопасна
     if (def.darkOnly && light > 7) return false;
     if (y < 6) return false;
     return night || light > 7;
@@ -244,14 +259,19 @@ export class Mobs {
       const dx = x - player.x, dz = z - player.z;
       const dd = Math.hypot(dx, dz);
       if (dd < SPAWN_MIN * 0.55 || dd > SPAWN_MAX) continue;
-      const ground = world.terrain.col(x, z).h;
+      let ground = world.terrain.col(x, z).h;
+      // рельеф ≠ поверхность: деревенскую площадку генератор выровнял и
+      // приподнял, платформы игрока достроены — поднимаемся на настоящий верх,
+      // иначе спавн упирается в пол и срывается (в деревнях не появлялся никто)
+      for (let i = 0; i < 10 && world.isSolid(x, ground + 1, z); i++) ground++;
       if (ground < 3) continue;
       const below = world.getBlock(x, ground, z);
       if (!below || liquidBlock(below)) continue;
       const y = ground + 1;
       const sky = world.skyAt(x, y, z);
       const light = Math.max(sky * 15 * (night ? 0.22 : 1), world.lightAt(x, y, z) * 15);
-      const ok = keys.filter((k) => this.#allowed(MOB_TYPES[k], night, light, y));
+      const inVillage = !!world.terrain.villageAt(x, z);
+      const ok = keys.filter((k) => this.#allowed(MOB_TYPES[k], night, light, y, inVillage));
       if (!ok.length) continue;
       const type = ok[(this.rng() * ok.length) | 0];
       const def = MOB_TYPES[type];

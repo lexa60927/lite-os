@@ -147,6 +147,12 @@ p.spawn(bx0 + 0.5, PY + 1.02, bz0 + 3.5);
 p.yaw = 0;                  // лицом к -z (в центр площадки)
 p.pitch = -0.4;             // чуть вниз: вижу пол в 2 блоках впереди
 await dom.__pumpFrames(4);
+// в выбранном слоте обязан быть ставящийся блок: добыча могла принести предмет (уголь)
+{
+  const { byKey: BK0 } = await import('../src/engine/blocks.js');
+  const cur = st.hotbar[st.sel];
+  if (!cur || cur === BK0('coal_item') || cur === BK0('pork') || cur === BK0('leather')) st.hotbar[st.sel] = BK0('cobblestone');
+}
 const selBlock = st.hotbar[st.sel];
 const beforePlace = st.world.editedCount;
 game.input.place = 1;
@@ -370,13 +376,60 @@ for (const dest of [[4200, 4200], [-3600, 2900], [640, -5100]]) {
   for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) {
     const k = (pcx + dx + 32768) * 65536 + (pcz + dz + 32768);
     seen++;
-    if (!game.chunkView.objects.has(k) && !game.state.world.getChunk(pcx + dx, pcz + dz)) missing++;
+    if (!game.chunkView.objects.has(k)) missing++;   // строго: без правок блок должен быть ВИДЕН
   }
   const backlog = game.state.world.dirtyMesh.size;
   console.log(`${missing === 0 && backlog < 4 ? '✔' : '✘'} бесконечная генерация в пути: чанков вокруг ${seen}, без меша ${missing}, в очереди ${backlog} (радиус ${R})`);
   if (missing > 0) throw new Error(`в радиусе игрока ${missing} чанков так и не сгенерированы`);
   if (backlog >= 4) throw new Error(`очередь меширования не рассасывается: ${backlog}`);
   game.settings.renderDistance = 10; game.chunkView.setRenderDistance(10);
+  p.flying = false;
+}
+
+// деревни: застраиваются, мешируются без копания и в них живут жители
+{
+  const world = game.state.world, T = world.terrain;
+  let site = null;
+  for (let rx = -14; rx <= 14 && !site; rx++) for (let rz = -14; rz <= 14 && !site; rz++) {
+    T.cache.clear();
+    site = T.villageSite(rx, rz);
+  }
+  if (!site) throw new Error('в тестовом сиде не нашлось ни одной деревни');
+  p.spawn(site.cx + 0.5, site.h + 6, site.cz + 0.5);
+  p.flying = true; p.vy = 0;
+  for (let i = 0; i < 6; i++) await dom.__pumpFrames(40);            // грузим кольцо стримером, ничего не ломая
+  const got = (dx, dz, y) => {
+    const x = Math.round(site.cx + dx), z = Math.round(site.cz + dz);
+    return world.getBlock(x, y, z);
+  };
+  // площадь: мостовая на уровне площадки и вода в колодце
+  const plaza = got(0, 0, site.h), well = got(0, 0, site.h + 1);
+  let built = 0, cells = 0;
+  for (let dz = -30; dz <= 30; dz += 3) for (let dx = -30; dx <= 30; dx += 3) {
+    cells++;
+    if (got(dx, dz, site.h)) built++;
+  }
+  // дома: стекло и доски должны появиться в мешах (иначе чанк «невидимый»)
+  let meshQuads = 0;
+  for (let cz = site.cz - 48; cz <= site.cz + 48; cz += 16) for (let cx = site.cx - 48; cx <= site.cx + 48; cx += 16) {
+    const o = game.chunkView.objects.get((Math.floor(cx / 16) + 32768) * 65536 + (Math.floor(cz / 16) + 32768));
+    if (o?.solid) meshQuads++;
+  }
+  // жителей проверяем детерминированно: не ждём удачного кадра, а зовём спавнер
+  const capSave = game.mobs.cap;
+  game.settings.mobs = 40; game.mobs.cap = 40; game.mobs.clear();
+  for (let i = 0; i < 400 && game.mobs.count < 40; i++) game.mobs.trySpawn(p);
+  game.mobs.cap = capSave;
+  const hostilesIn = game.mobs.list.filter((m) => m.def.hostile && T.villageAt(Math.floor(m.x), Math.floor(m.z)));
+  const okPlaza = !!plaza && !!well;
+  console.log(`  деревня ${site.cx},${site.cz} (h=${site.h}, биом ${(await import('../src/engine/gen.js')).BIOME_NAMES[site.biome]}): застроено ${built}/${cells} колонок, чанков с мешем ${meshQuads}/49, жителей ${game.mobs.list.filter((m) => m.type === 'villager').length}, врагов в деревне ${hostilesIn.length}`);
+  if (!okPlaza) throw new Error(`площадь деревни не отстроена (блок ${plaza}, вода ${well})`);
+  if (built / cells < 0.9) throw new Error(`деревня построена лишь на ${(built / cells * 100).toFixed(0)}% участка`);
+  if (meshQuads < 45) throw new Error(`чанки деревни не смещались сами: ${meshQuads}/49 — нужен пинок правкой`);
+  if (!game.mobs.list.some((m) => m.type === 'villager')) {
+    throw new Error(`жители не заселили деревню за ${game.mobs.count} попыток спавна (разрешённые: ${[...new Set(game.mobs.list.map((m) => m.type))].join(', ')})`);
+  }
+  if (hostilesIn.length) throw new Error('враждебные мобы спавнятся прямо в деревне');
   p.flying = false;
 }
 

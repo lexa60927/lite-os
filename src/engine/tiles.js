@@ -400,6 +400,83 @@ painters.item_pork = (tl) => {
   return tl;
 };
 
+// --- деревни ---
+painters.farmland = (tl) => {
+  tl.fill('#4b3520');
+  tl.grain('#3f2b19', '#57401f', 0.55);
+  for (let y = 1; y < 15; y += 3) { tl.rect(0, y, 16, 2, '#33220f'); tl.rect(0, y + 2, 16, 1, '#5c4525'); }
+  tl.speckles('#6d5230', 16, 7);
+  tl.border('#2b1c0c', 0.5);
+  return tl;
+};
+painters.wheat = (tl) => {
+  tl.clear();
+  const stalks = [[2, 5], [6, 3], [10, 6], [13, 4], [4, 11], [8, 12], [12, 10]];
+  for (const [x, top] of stalks) {
+    for (let y = 15; y >= top; y--) tl.set(x, y, '#8aa63c', 255);
+    for (let i = 0; i < 4; i++) {                     // колос
+      tl.rect(x - 1, top + i, 3, 1, '#dcb955');
+      tl.set(x, top + i, '#f0d67e', 255);
+    }
+    tl.set(x + 1, top + 3, '#6f8a2e', 255);           // листик
+  }
+  return tl;
+};
+painters.hay_side = (tl) => {
+  tl.fill('#c2a03c');
+  tl.grain('#b28f2f', '#d3b254', 0.5);
+  for (let y = 0; y < 16; y += 2) tl.rect(0, y, 16, 1, '#ad8b2c');
+  tl.rect(3, 0, 2, 16, '#6d5318');                    // перевязи
+  tl.rect(11, 0, 2, 16, '#6d5318');
+  tl.rect(0, 0, 16, 1, '#8f7220');
+  tl.rect(0, 15, 16, 1, '#7e6318');
+  return tl;
+};
+painters.hay_top = (tl) => {
+  tl.fill('#d3b254');
+  tl.grain('#c4a344', '#e0c266', 0.5);
+  for (const [x, y, w] of [[2, 2, 12], [4, 4, 8], [6, 6, 4]]) {
+    tl.rect(x, y, w, 1, '#a98731');
+    tl.rect(x, y + w - 1, w, 1, '#a98731');
+    tl.rect(x, y, 1, w, '#a98731');
+    tl.rect(x + w - 1, y, 1, w, '#a98731');
+  }
+  tl.rect(7, 7, 2, 2, '#8a6c28');
+  return tl;
+};
+painters.item_emerald = (tl) => {
+  tl.clear();
+  for (let y = 0; y < 16; y++) {
+    const half = Math.round(2 + (6 - Math.abs(y - 7.5)) * 1.1);
+    tl.rect(8 - half, y, half * 2, 1, '#1f9c58');
+  }
+  tl.rect(5, 5, 4, 4, '#43d47f');
+  tl.rect(4, 4, 2, 2, '#a6f2c4');
+  tl.rect(9, 9, 3, 3, '#146c3c');
+  tl.set(8, 3, '#8be9b6'); tl.set(3, 8, '#8be9b6');
+  return tl;
+};
+painters.mob_villager = (tl) => {
+  tl.fill('#6d4b2c');
+  tl.grain('#5f4025', '#7d5a37', 0.5);
+  for (let y = 1; y < 16; y += 4) tl.rect(0, y, 16, 1, '#57381f');
+  tl.rect(0, 6, 16, 3, '#8a6a44');                     // пояс/воронник
+  tl.rect(0, 7, 16, 1, '#a3855c');
+  tl.rect(2, 10, 12, 1, '#57381f');
+  return tl;
+};
+painters.mob_villager_face = (tl) => {
+  tl.fill('#c39a6b');
+  tl.grain('#b8905f', '#cba876', 0.4);
+  tl.rect(0, 0, 16, 4, '#4a3520');                     // волосы/капюшон
+  tl.rect(0, 3, 16, 1, '#5d452a');
+  tl.rect(3, 7, 2, 2, '#2f2a3a'); tl.rect(11, 7, 2, 2, '#2f2a3a');   // глаза
+  tl.rect(2, 6, 4, 1, '#8a6a44'); tl.rect(10, 6, 4, 1, '#8a6a44');   // брови
+  tl.rect(7, 8, 2, 4, '#ab7f52'); tl.rect(6, 11, 4, 2, '#b98d5d');   // нос
+  tl.rect(4, 13, 8, 1, '#4a3520');                     // борода
+  return tl;
+};
+
 export const TILE_NAMES = Object.keys(painters).filter((n) => painters[n]);
 
 /** name → index в атласе; тайл → PixelTile */

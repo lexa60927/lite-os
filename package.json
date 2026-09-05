@@ -8,9 +8,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
+    "render": "node dev/render-view.mjs",
     "test": "node --experimental-loader ./dev/loaders/css.mjs dev/smoke.mjs",
     "test:shaders": "node dev/test-shaders.cjs",
-    "render": "node dev/render-view.mjs"
+    "test:api": "node --experimental-loader ./dev/loaders/css.mjs dev/test-api.mjs",
+    "test:villages": "node --experimental-loader ./dev/loaders/css.mjs dev/test-villages.mjs",
+    "bench:mesh": "node dev/bench-mesh.mjs"
   },
   "dependencies": {
     "three": "0.160.1"

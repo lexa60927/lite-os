@@ -150,6 +150,9 @@ export class BlockTarget {
     this.outline.visible = true;
   }
 
+  /** Спрятать подсветку (например, когда в прицеле моб, а не блок). */
+  hide() { this.show(null); }
+
   setBreakProgress(p) {
     if (p <= 0) { this.crack.visible = false; this.stage = -1; return; }
     const stage = Math.min(CRACK_STAGES - 1, Math.floor(p * CRACK_STAGES));
