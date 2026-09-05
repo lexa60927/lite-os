@@ -38,7 +38,8 @@ export class Game {
   constructor(deps = {}) {
     this.canvas = document.getElementById('gl');
     this.renderer = deps.renderer ?? createRenderer(this.canvas);
-    if (!deps.renderer) this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    // только pixelRatio: камера ещё не создана, а разрешение надо применить сразу
+    if (!deps.renderer) this.applyPixelRatio();
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(74, 1, 0.08, 1800);
@@ -161,6 +162,17 @@ export class Game {
   openSettings(from) {
     this.hud.settingsForm(this.settings, (key, value) => this.applySettings(key, value), {
       onRegenerate: () => { if (this.state.world) { this.state.world.rebuildAll?.(); this.chunkView?.rebuildAll(); } },
+      onLowSpec: () => {
+        // Один клик для встроенного GPU и 4–8 ГБ памяти. Умышленно НЕ трогаем
+        // renderDistance: запрос был «10 чанков и больше должны работать»,
+        // значит режем цену кадра, а не размер мира.
+        this.settings = { ...this.settings, renderScale: 0.65, ao: false, clouds: 0.3, mobs: 8 };
+        saveSettings(this.settings);
+        this.applySettings(null, true);
+        this.chunkView?.rebuildAll();      // AO меняет геометрию — меши перестраиваем
+        this.hud.toast('Слабое железо: рендер 65%, без AO, мобильно 8. Дальность прорисовки как была', '');
+        this.openSettings(from);
+      },
       onReset: () => {
         this.settings = { ...DEFAULT_SETTINGS };
         saveSettings(this.settings);
@@ -188,6 +200,7 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.hud.hideDebug(!s.showDebug);
     if (key === 'ao' || key === 'smoothLight') { this.chunkView?.rebuildAll(); }
+    if (key === 'renderScale' || key === null) this.applyPixelRatio();
     if (key === 'touch' || key === null) this.setupTouch();
   }
 
@@ -834,10 +847,21 @@ export class Game {
   }
 
   // ------------------------------------------------------------ цикл
+  /**
+   * Разрешение framebuffer'а: devicePixelRatio (потолок 2 — на 4K-экранах это
+   * главный источник тормозов) умножается на пользовательский «размер рендера».
+   * 0.7× — это ~49% меньше закрашиваемых пикселей, а на пиксель-арт-текстурах
+   * с Nearest-фильтром разница почти не заметна.
+   */
+  applyPixelRatio() {
+    const rs = Math.max(0.5, Math.min(1, this.settings?.renderScale ?? 1));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2) * rs);
+  }
+
   resize() {
     const w = innerWidth, h = innerHeight;
     this.renderer.setSize(w, h, false);
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    this.applyPixelRatio();
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
   }

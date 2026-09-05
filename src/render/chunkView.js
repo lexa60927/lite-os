@@ -228,7 +228,11 @@ export class ChunkView {
     }
     const put = (name, arr, size) => {
       const prev = geo.getAttribute(name);
-      if (prev && prev.array.length >= arr.length) {
+      // Совпадение типа обязательно: set() из Uint32 в Uint16 молча обрезает
+      // значения (индексы уходят в мусор → грань не рисуется), а Float32 ← Uint8
+      // превращает свет в шум. Тип у нас постоянный, проверка — страховка на
+      // случай, если формат атрибутов когда-нибудь поменяют.
+      if (prev && prev.array.length >= arr.length && prev.array.constructor === arr.constructor) {
         prev.array.set(arr);
         prev.needsUpdate = true;
         return;
@@ -242,7 +246,7 @@ export class ChunkView {
     put('light', data.light, 4);
     put('tint', data.tint, 3);
     const idxPrev = geo.getIndex();
-    if (idxPrev && idxPrev.array.length >= data.index.length) {
+    if (idxPrev && idxPrev.array.length >= data.index.length && idxPrev.array.constructor === data.index.constructor) {
       idxPrev.array.set(data.index);
       idxPrev.needsUpdate = true;
     } else {

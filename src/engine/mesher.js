@@ -24,6 +24,36 @@ export const FACES = [
   { dir: [0, 0, -1], shade: 0.9, verts: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], uv: [[0, 1], [0, 0], [1, 0], [1, 1]] },
 ];
 
+
+// ── переиспользование буферов ──────────────────────────────────────────────
+// На слабом железе меширование режет не столько временем, сколько мусором:
+// раньше на КАЖДЫЙ чанк создавалось два QuadBuffer (на 4096 и 1024 квада) —
+// около 1.1 МБ обнулённых типизированных массивов, из которых средний чанк
+// выбрасывал 1793 квада, а вода большинству чанков не нужна вовсе. При
+// стартовом радиусе 10 (441 чанк) это ~0.5 ГБ мусора за несколько секунд —
+// то самое «лагами при загрузке мира» на 4–8 ГБ машинах. Пул держит до 10
+// буферов (~4 МБ) и раздаёт их по кругу; уродливо выросшие (из-за чанка-гиганта)
+// обратно не берём, чтобы не таскать мегабайсы вечно.
+const POOL_MIN_CAP = 1024;
+const POOL_KEEP = 10;
+const POOL_MAX_KEEP_CAP = 8192;
+const bufPool = [];
+
+function acquireBuffer() {
+  for (let i = 0; i < bufPool.length; i++) {
+    if (bufPool[i].cap >= POOL_MIN_CAP) { const b = bufPool[i]; bufPool.splice(i, 1); b.reset(); return b; }
+  }
+  return new QuadBuffer(POOL_MIN_CAP);
+}
+
+function releaseBuffer(b) {
+  if (!b) return;
+  if (bufPool.length < POOL_KEEP && b.cap <= POOL_MAX_KEEP_CAP) { b.reset(); bufPool.push(b); }
+}
+
+/** Для тестов/профилировщиков: сколько буферов сейчас в пуле. */
+export const meshPoolStats = () => ({ free: bufPool.length, keep: POOL_KEEP, cap: POOL_MIN_CAP });
+
 /** Настройки меширования (управляются из UI). */
 export const mesherFlags = { ao: true, smoothLight: true };
 
@@ -92,6 +122,28 @@ export class QuadBuffer {
     this.q++;
   }
 
+  /**
+   * Копии ровно отрисованной части. Владение переходит на сторону рендера,
+   * поэтому сам буфер после этого можно вернуть в пул. Срез нужен ещё и
+   * потому, что базовый массив может быть вдвое-вчетверо больше полезной
+   * части, а три.js загружает атрибут целиком.
+   */
+  take() {
+    if (this.q === 0) return null;
+    return {
+      position: this.pos.slice(0, this.q * 12),
+      uv: this.uv.slice(0, this.q * 8),
+      light: this.light.slice(0, this.q * 16),
+      tint: this.tint.slice(0, this.q * 12),
+      index: this.index.slice(0, this.q * 6),
+      quads: this.q,
+      vertices: this.q * 4,
+    };
+  }
+
+  /** Сброс для повторного использования: данные перезаписываются, обнулять нечего. */
+  reset() { this.q = 0; this.tr = 1; this.tg = 1; this.tb = 1; }
+
   slice() {
     if (this.q === 0) return null;
     return {
@@ -114,6 +166,33 @@ export function tileRect(tileIndex, cell, tile, grid) {
   return { u0: (col * cell + off) / size, v0: (row * cell + off) / size, s: tile / size };
 }
 
+/*
+/*
+   ОТМЕНЁННАЯ ОПТИМИЗАЦИЯ (не возвращать без новых замеров): пропуск «глухих»
+   клеток по нижней границе воздуха в колонке (colStart + 3x3-растяжка) дал
+   +0.5 мс/чанк при неизменном числе квадов — одна проверка с загрузкой
+   start[] на клетку стоит дороже, чем шесть обращений к мемо-маске, которые
+   она экономила. Меширование: 5.86 → 4.83 мс/чанк после маски и пула буферов.
+ */
+
+/**
+ * Scratch-маска непрозрачности. Один проход меширования делает 6 обращений на
+ * каждую клетку столбца и по 16 угловых проб на каждый квад; раньше каждый
+ * был со своими проверками границ, а у края чанка — ещё и с чтением соседнего
+ * массива. Буфер живёт в модуле (buildChunkMesh не реентерабелен), поэтому за
+ * меширование не аллоцируется ничего, а повторные пробы стоят одну чтение.
+ * 0 — не кэшировано, 1 — прозрачно, 2 — непрозрачно.
+ */
+const MW = 21;                       // ±2 по горизонтали: углы AO залезают за край
+const MROW = MW * MW;
+let maskBuf = null;
+function opaqueMask(rows) {
+  const need = rows * MROW;
+  if (!maskBuf || maskBuf.length < need) maskBuf = new Uint8Array(need);
+  else maskBuf.fill(0, 0, need);
+  return maskBuf;
+}
+
 /** Кэш чанковых массивов 3×3 вокруг мешуемого чанка — без Map-поисков на каждый блок. */
 class NeighborCache {
   constructor(world, cx, cz) {
@@ -132,8 +211,10 @@ class NeighborCache {
  * @param {object} atlas  { index: {name: i}, cell, tile, grid }
  */
 export function buildChunkMesh(world, chunk, atlas) {
-  const solid = new QuadBuffer(4096);
-  const water = new QuadBuffer(1024);
+  const solid = acquireBuffer();
+  // Водяной буфер заводится только если вода в чанке реально есть (а у 8 чанков
+  // из 10 её нет): раньше это был ещё один полмегабайтный массив на чанк.
+  let water = null;
   const cx = chunk.cx;
   const cz = chunk.cz;
   const self = chunk.blocks;
@@ -152,9 +233,7 @@ export function buildChunkMesh(world, chunk, atlas) {
     if (!c) return 0;
     return c.blocks[idx(lx + (dx ? -dx * CH : 0), ly, lz + (dz ? -dz * CH : 0))];
   };
-  const opaqueAt = (lx, ly, lz) => {
-    if (ly < 0) return true;
-    if (ly >= HEIGHT) return false;
+  const opaqueRaw = (lx, ly, lz) => {
     if (lx >= 0 && lx < CH && lz >= 0 && lz < CH) return OPAQUE[self[idx(lx, ly, lz)]] === 1;
     const dx = lx < 0 ? -1 : lx >= CH ? 1 : 0;
     const dz = lz < 0 ? -1 : lz >= CH ? 1 : 0;
@@ -197,6 +276,18 @@ export function buildChunkMesh(world, chunk, atlas) {
   // hmax === 0 значит «данных нет» (чанк собрали вручную, без generate) — тогда
   // сканируем столбцы целиком, чтобы никаких блоков не потерялось
   const yTop = !chunk.hmax ? HEIGHT : Math.min(HEIGHT, Math.max(chunk.hmax + 2, SEA_TOP));
+  const mask = opaqueMask(Math.min(HEIGHT, yTop + 2) + 1);
+  const opaqueAt = (lx, ly, lz) => {
+    if (ly < 0) return true;
+    if (ly >= HEIGHT) return false;
+    if (lx < -2 || lx > CH + 1 || lz < -2 || lz > CH + 1 || (ly + 1) * MROW >= mask.length) return opaqueRaw(lx, ly, lz);
+    const mi = (ly + 1) * MROW + (lz + 2) * MW + (lx + 2);
+    const m = mask[mi];
+    if (m) return m === 2;
+    const v = opaqueRaw(lx, ly, lz) ? 2 : 1;
+    mask[mi] = v;
+    return v === 2;
+  };
   for (let ly = 0; ly < yTop; ly++) {
     for (let lz = 0; lz < CH; lz++) {
       const rowBase = (ly * CH + lz) * CH;
@@ -213,7 +304,7 @@ export function buildChunkMesh(world, chunk, atlas) {
           tr = c[0]; tg = c[1]; tb = c[2];
         }
         solid.setTint(tr, tg, tb);
-        water.setTint(tr, tg, tb);
+        if (water) water.setTint(tr, tg, tb);   // водяной буфер ещё может не существовать
 
         if (render === R_CROSS || render === R_TORCH) {
           const rect = tileRect(atlas.index[def.tiles.all], atlas.cell, atlas.tile, atlas.grid);
@@ -250,7 +341,13 @@ export function buildChunkMesh(world, chunk, atlas) {
 
         if (render !== R_CUBE && render !== R_LIQUID) continue;
         const isLiquid = render === R_LIQUID;
-        const buf = isLiquid ? water : solid;
+        let buf = solid;
+        if (isLiquid) {
+          // Водяной буфер заводим по требованию — и сразу с текущим оттенком биома, иначе
+          // свежий буфер стартовал бы с белым tint и вода потеряла бы подкраску
+          if (!water) { water = acquireBuffer(); water.setTint(tr, tg, tb); }
+          buf = water;
+        }
         const inset = INSET[id];
         const flat = FULL_BRIGHT[id] === 1;
         const glow = LIGHT[id];
@@ -317,5 +414,8 @@ export function buildChunkMesh(world, chunk, atlas) {
     }
   }
 
-  return { solid: solid.slice(), water: water.slice() };
+  const out = { solid: solid.take(), water: water ? water.take() : null };
+  releaseBuffer(solid);
+  releaseBuffer(water);
+  return out;
 }

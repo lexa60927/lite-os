@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS = {
   dayLength: 8,
   freeTime: false,
   clouds: 0.75,
+  renderScale: 1,
   ao: true,
   smoothLight: true,
   viewBob: true,
@@ -285,6 +286,7 @@ export class Hud {
       { key: 'sfx', label: 'Громкость эффектов', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
       { key: 'music', label: 'Громкость музыки', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
       { key: 'clouds', label: 'Облачность', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
+      { key: 'renderScale', label: 'Разрешение рендера', min: 0.5, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%${v >= 0.98 ? ' · пиксель в пиксель' : v >= 0.8 ? ' · мягко' : ' · экономно'}` },
       { key: 'dayLength', label: 'Длина суток, мин', min: 2, max: 40, step: 1, fmt: (v) => `${v}` },
       { key: 'mobs', label: 'Мобов вокруг', min: 0, max: 32, step: 1, fmt: (v) => (v ? `${v}` : 'выкл') },
     ];
@@ -345,7 +347,16 @@ export class Hud {
       btn2.className = 'btn ghost';
       btn2.textContent = 'Сбросить настройки';
       btn2.onclick = extra.onReset;
-      row.append(btn, btn2);
+      const all = [btn, btn2];
+      if (extra.onLowSpec) {
+        const b3 = document.createElement('button');
+        b3.className = 'btn ghost';
+        b3.textContent = 'Слабое железо';
+        b3.title = 'Меньше пикселей, без AO, реже свет и облака · дальность прорисовки не трогаем';
+        b3.onclick = extra.onLowSpec;
+        all.push(b3);
+      }
+      row.append(...all);
       box.appendChild(row);
     }
   }
