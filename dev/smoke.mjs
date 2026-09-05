@@ -302,8 +302,18 @@ if (mobMax === 0) throw new Error('мобы не появились за 20 с')
 const mob = game.mobs.list[0];
 const mobY = mob.y, mobId = mob.id, mobX0 = mob.x, mobZ0 = mob.z;
 await dom.__pumpFrames(90);
-const feet = (m) => st.world.isSolid(Math.floor(m.x), Math.floor(m.y - 0.2), Math.floor(m.z))
-  || !!BL[st.world.getBlock(Math.floor(m.x), Math.floor(m.y), Math.floor(m.z))]?.liquid;
+// опора = любой твёрдый блок под ANY точкой футпринта моба: у него AABB ширины
+// def.w, и на ребре блока центр может висеть над воздухом — это не левитация
+const feet = (m) => {
+  const hw = Math.max(0.1, (m.def?.w ?? 0.6) / 2 - 0.02);
+  for (const dy of [-0.5, -1.5]) {
+    for (const dx of [-hw, 0, hw]) for (const dz of [-hw, 0, hw]) {
+      if (st.world.isSolid(Math.floor(m.x + dx), Math.floor(m.y + dy), Math.floor(m.z + dz))) return true;
+    }
+  }
+  for (const dy of [0, 0.9]) if (BL[st.world.getBlock(Math.floor(m.x), Math.floor(m.y + dy), Math.floor(m.z))]?.liquid) return true;
+  return false;
+};
 const mobMoved = Math.hypot(mob.x - mobX0, mob.z - mobZ0);
 console.log(`  живой моб: ${mob.type} hp ${mob.hp.toFixed(1)} y ${mobY.toFixed(2)} → ${mob.y.toFixed(2)} · на земле ${mob.onGround} · опора ${feet(mob)} · vy ${(mob.vy ?? 0).toFixed(2)} · прошёл ${mobMoved.toFixed(2)} бл`);
 if (!Number.isFinite(mob.y) || mob.y < -4) throw new Error('моб ушёл в бездну');
