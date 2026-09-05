@@ -46,6 +46,11 @@ export class Game {
     this.scene.add(this.camera);
 
     this.atlas = new Atlas();
+    // mipmap без анизотропии мылит пол «в кашу»; с ней боковые грани остаются
+    // резкими вплоть до горизонта — ровно то, чего не хватало в жалобе на текстуры.
+    try {
+      this.atlasAniso = this.atlas.setMaxAnisotropy(this.renderer.capabilities?.getMaxAnisotropy?.() ?? 1);
+    } catch { this.atlasAniso = 1; }
     this.materials = createVoxelMaterials(this.atlas);
     this.sky = new Sky(this.scene);
     this.particles = new Particles(this.scene);

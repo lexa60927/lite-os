@@ -5,7 +5,7 @@
  */
 import { BLOCKS } from '../src/engine/blocks.js';
 import { buildTiles } from '../src/engine/tiles.js';
-import { packAtlas, TILE, GRID } from '../src/engine/pixels.js';
+import { packAtlas, TILE, GRID, CELL } from '../src/engine/pixels.js';
 
 const { tiles, index } = buildTiles();
 const packed = packAtlas(tiles);
@@ -17,7 +17,7 @@ const bad = (msg) => { console.log('✘ ' + msg); fail++; };
 const names = tiles.map((t) => t.name);
 if (new Set(names).size !== names.length) bad('дубли имён тайлов: ' + names.filter((n, i) => names.indexOf(n) !== i).join(', '));
 if (tiles.length > GRID * GRID) bad(`атлас ${tiles.length} тайлов не влезает в сетку ${GRID}×${GRID}`);
-if (packed.width !== GRID * 24) bad(`размер атласа ${packed.width} вместо ${GRID * 24} (сетка ${GRID}, ячейка 24)`);
+if (packed.width !== GRID * CELL) bad(`размер атласа ${packed.width} вместо ${GRID * CELL} (сетка ${GRID}, ячейка ${CELL})`);
 console.log(`✔ атлас: ${tiles.length} тайлов ${packed.width}×${packed.height}, сетка ${GRID}×${GRID}, тайл ${TILE}px`);
 
 // 2. каждый тайл непустой (не все пиксели одинаковые) и без NaN
@@ -50,7 +50,7 @@ for (const def of BLOCKS) {
 console.log(`${fail ? '✘' : '✔'} ссылок на тайлы: ${refs}`);
 
 // 4. UV-прямоугольник конечен для каждого тайла
-const cell = 24, tile = TILE, grid = GRID;
+const cell = CELL, tile = TILE, grid = GRID;
 for (const name of Object.keys(index)) {
   const i = index[name];
   const gx = i % grid, gy = (i / grid) | 0;

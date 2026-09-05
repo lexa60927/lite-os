@@ -3,7 +3,7 @@ import { CHUNK, HEIGHT, idx } from '../src/engine/constants.js';
 import { byKey } from '../src/engine/blocks.js';
 
 const STONE = byKey('stone'), GRASS = byKey('grass'), WATER = byKey('water');
-const atlas = { index: { stone: 0, dirt: 1, grass_top: 2, grass_side: 3, water: 4 }, cell: 24, tile: 16, grid: 16 };
+const atlas = { index: { stone: 0, dirt: 1, grass_top: 2, grass_side: 3, water: 4 }, cell: 32, tile: 16, grid: 16 };
 const blocks = new Uint8Array(CHUNK*CHUNK*HEIGHT);
 for (let z=0;z<CHUNK;z++) for (let x=0;x<CHUNK;x++) { blocks[idx(x,40,z)] = GRASS; blocks[idx(x,39,z)] = STONE; }
 for (let z=0;z<CHUNK;z++) blocks[idx(15,41,z)] = WATER;

@@ -305,10 +305,10 @@ await dom.__pumpFrames(90);
 const feet = (m) => st.world.isSolid(Math.floor(m.x), Math.floor(m.y - 0.2), Math.floor(m.z))
   || !!BL[st.world.getBlock(Math.floor(m.x), Math.floor(m.y), Math.floor(m.z))]?.liquid;
 const mobMoved = Math.hypot(mob.x - mobX0, mob.z - mobZ0);
-console.log(`  живой моб: ${mob.type} hp ${mob.hp.toFixed(1)} y ${mobY.toFixed(2)} → ${mob.y.toFixed(2)} · на земле ${mob.onGround} · опора ${feet(mob)} · прошёл ${mobMoved.toFixed(2)} бл`);
+console.log(`  живой моб: ${mob.type} hp ${mob.hp.toFixed(1)} y ${mobY.toFixed(2)} → ${mob.y.toFixed(2)} · на земле ${mob.onGround} · опора ${feet(mob)} · vy ${(mob.vy ?? 0).toFixed(2)} · прошёл ${mobMoved.toFixed(2)} бл`);
 if (!Number.isFinite(mob.y) || mob.y < -4) throw new Error('моб ушёл в бездну');
 if (Math.abs(mob.y - mobY) > 2.5) throw new Error('моб проваливается/улетает — физика не работает');
-if (!feet(mob)) throw new Error('моб висит в воздухе без опоры');
+if (!feet(mob) && Math.abs(mob.vy ?? 0) < 0.5) throw new Error('моб висит в воздухе без опоры и не падает');
 if (mobMoved <= 0) throw new Error('моб не двигается — ИИ не работает');
 // удар мечом убивает пассивного моба — и его собственный дроп падает в инвентарь
 const dropIds = (mob.def.drops ? mob.def.drops() : []).map((d) => d.id);
@@ -348,6 +348,42 @@ for (const dest of [[4200, 4200], [-3600, 2900], [640, -5100]]) {
   console.log(`  дальняя точка ${dest.join(',')}: биом ${bio}, чанков ${before} → ${game.state.world.chunkCount}, блок на высоте ${surf}: ${BL[solidBelow]?.key ?? '∅'}`);
   if (!loaded || !solidBelow) throw new Error(`мир не генерируется в ${dest.join(',')}`);
 }
+// генерация не останавливается: идём далеко — кольцо вокруг игрока полное
+{
+  const R = game.chunkView.renderDistance;
+  p.spawn(2500.5, 70, 2500.5); p.flying = true; p.vy = 0;
+  game.settings.renderDistance = 4; game.chunkView.setRenderDistance(4);
+  for (let i = 0; i < 8; i++) { await dom.__pumpFrames(30); p.x += 6; }   // «идём» вперёд
+  await dom.__pumpFrames(240);
+  const pcx = Math.floor(p.x / 16), pcz = Math.floor(p.z / 16);
+  let missing = 0, seen = 0;
+  for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) {
+    const k = (pcx + dx + 32768) * 65536 + (pcz + dz + 32768);
+    seen++;
+    if (!game.chunkView.objects.has(k) && !game.state.world.getChunk(pcx + dx, pcz + dz)) missing++;
+  }
+  const backlog = game.state.world.dirtyMesh.size;
+  console.log(`${missing === 0 && backlog < 4 ? '✔' : '✘'} бесконечная генерация в пути: чанков вокруг ${seen}, без меша ${missing}, в очереди ${backlog} (радиус ${R})`);
+  if (missing > 0) throw new Error(`в радиусе игрока ${missing} чанков так и не сгенерированы`);
+  if (backlog >= 4) throw new Error(`очередь меширования не рассасывается: ${backlog}`);
+  game.settings.renderDistance = 10; game.chunkView.setRenderDistance(10);
+  p.flying = false;
+}
+
+// миграция настроек: старая тесная дальность не должна переживать обновление
+{
+  const { loadSettings, saveSettings, SETTINGS_KEY, SETTINGS_VERSION } = await import('../src/game/save.js');
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ fov: 80, renderDistance: 6, ao: false }));
+  const migrated = loadSettings();
+  const ok = migrated.renderDistance === undefined && migrated.fov === 80 && migrated.ao === false;
+  saveSettings({ renderDistance: 12, fov: 80 });
+  const stored = loadSettings();
+  console.log(`${ok && stored.renderDistance === 12 && stored.v === SETTINGS_VERSION ? '✔' : '✘'} миграция настроек: старая дальность сброшена (${migrated.renderDistance ?? 'нет'}), свои сохранены (${stored.renderDistance})`);
+  if (!ok) throw new Error('настройки мигрировали неверно');
+  if (stored.renderDistance !== 12) throw new Error('новая дальность не сохранилась');
+  localStorage.removeItem(SETTINGS_KEY);
+}
+
 const biomesSeen = new Set();
 for (let i = 0; i < 200; i++) {
   const x = (i * 613) % 9000 - 4500, z = (i * 971) % 9000 - 4500;

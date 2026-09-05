@@ -1,23 +1,27 @@
 /** Атлас текстур (DataTexture), canvas-тайлы для UI, трещины при поломке, иконки блоков. */
 import * as THREE from 'three';
 import { buildTiles } from '../engine/tiles.js';
-import { packAtlas, tileToCanvas, TILE } from '../engine/pixels.js';
+import { packAtlas, tileToCanvas, TILE, CELL as PACK_CELL, GRID as PACK_GRID } from '../engine/pixels.js';
 import { buildCracks } from './cracks.js';
 import { BLOCKS, AIR } from '../engine/blocks.js';
 
-export const GRID = 16;
-export const CELL = 24;
+// 16×16 ячеек по 32 px = атлас 512×512: степень двойки, поэтому mipmaps легальны
+// в любом WebGL-контексте (с 384 px — NPOT, и без mipmaps дальние грани рябили).
+export const GRID = PACK_GRID;
+export const CELL = PACK_CELL;
 
 export class Atlas {
   constructor() {
     const { tiles, index } = buildTiles();
     const packed = packAtlas(tiles);
     const tex = new THREE.DataTexture(packed.data, packed.width, packed.height, THREE.RGBAFormat);
-    tex.magFilter = THREE.NearestFilter;
-    // Без mipmaps: у атласа соседние тайлы стоят вплотную, и на мип-уровнях 3+
-    // они усреднялись — по дальним чанкам шли зелёные/ржавые разводы.
-    tex.minFilter = THREE.NearestFilter;
-    tex.generateMipmaps = false;
+    tex.magFilter = THREE.NearestFilter;              // вблизи — честный пиксель-арт
+    // Mipmap нужен, чтобы наискось уходящая в даль поверхность не рябила (moiré):
+    // без него 16px тайл на дистанции превращается в шум. Кровоток между тайлами
+    // закрыт PAD-полем (packAtlas дублирует крайние пиксели), поэтому уровни
+    // смешивают только сам тайл — разводов, как было с плотной упаковкой, нет.
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.colorSpace = THREE.NoColorSpace;
     tex.needsUpdate = true;
@@ -31,6 +35,14 @@ export class Atlas {
     for (const t of tiles) this.canvases[t.name] = tileToCanvas(t.tile, 1);
     this.cracks = buildCracks();
     this.iconCache = new Map();
+  }
+
+  /** Максимальная анизотропия браузера: с ней боковые грани остаются резкими далеко. */
+  setMaxAnisotropy(n) {
+    const a = Math.max(1, Math.min(8, n | 0));
+    this.texture.anisotropy = a;
+    this.texture.needsUpdate = true;
+    return a;
   }
 
   /** Иконка блока: изометрический кубик из тайлов (как в хотбаре Minecraft). */

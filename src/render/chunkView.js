@@ -31,19 +31,33 @@ export class ChunkView {
     const pcz = Math.floor(playerPos.z / CHUNK);
     const R = this.renderDistance;
 
+    // Упреждение по скорости: кольцо генерации смещается туда, куда мы идём, —
+    // новые чанки успевают появиться перед носом, а дыры остаются позади (в тумане).
+    const vx = playerPos.vx ?? 0, vz = playerPos.vz ?? 0;
+    const ax = Math.max(-2, Math.min(2, Math.round((vx * 1.1) / CHUNK)));
+    const az = Math.max(-2, Math.min(2, Math.round((vz * 1.1) / CHUNK)));
+    const fcx = pcx + ax, fcz = pcz + az;
+    // после телепорта/быстрого полёта очередь большая — временно тратим больше кадра
+    const boost = world.dirtyMesh.size > 20 ? 2 : 1;
+
     let t0 = performance.now();
     let gen = 0;
-    // 1. генерация кольцами от игрока (на один дальше, чем радиус меширования)
+    // 1. генерация кольцами от «фокуса» (на один дальше, чем радиус меширования)
     outer:
     for (let ring = 0; ring <= R + 1; ring++) {
       for (let dz = -ring; dz <= ring; dz++) {
         for (let dx = -ring; dx <= ring; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
-          const cx = pcx + dx, cz = pcz + dz;
+          const cx = fcx + dx, cz = fcz + dz;
           if (!world.getChunk(cx, cz)) {
-            world.ensureChunk(cx, cz);
+            try {
+              world.ensureChunk(cx, cz);
+            } catch (e) {
+              if (!this._genErr) { this._genErr = 1; console.error('чанк не сгенерирован:', cx, cz, e); }
+              continue;
+            }
             gen++;
-            if (performance.now() - t0 > this.genBudget) break outer;
+            if (performance.now() - t0 > this.genBudget * boost) break outer;
           }
         }
       }
@@ -70,21 +84,27 @@ export class ChunkView {
       const c = world.getChunk(cx, cz);
       if (!c) { world.dirtyMesh.delete(k); continue; }
       if (!world.getChunk(cx + 1, cz) || !world.getChunk(cx - 1, cz) || !world.getChunk(cx, cz + 1) || !world.getChunk(cx, cz - 1)) continue;
-      ready.push([((cx - pcx) ** 2 + (cz - pcz) ** 2), cx, cz]);
+      ready.push([((cx - fcx) ** 2 + (cz - fcz) ** 2), cx, cz]);
     }
     ready.sort((a, b) => a[0] - b[0]);
     for (const [, cx, cz] of ready) {
-      this.remesh(cx, cz);
+      // один неудачный чанк не должен ронять весь кадр: иначе стриминг встаёт
+      // молча и мир «перестаёт расти» для игрока
+      try {
+        this.remesh(cx, cz);
+      } catch (e) {
+        if (!this._meshErr) { this._meshErr = 1; console.error('меширование чанка не удалось:', cx, cz, e); }
+      }
       world.dirtyMesh.delete(ChunkView.key(cx, cz));
       meshed++;
-      if (performance.now() - t0 > this.meshBudget) break;
+      if (performance.now() - t0 > this.meshBudget * boost) break;
     }
     this.stats.gen = gen;
     this.stats.mesh = meshed;
     this.stats.pending = world.dirtyMesh.size;
 
-    // 4. выгрузка
-    const keep = R + 1;
+    // 4. выгрузка (гистерезис: чанки упреждения не выбрасываем в том же кадре)
+    const keep = R + 3;
     for (const [k, obj] of this.objects) {
       const [cx, cz] = decodeChunkKey(k);
       if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > keep) {

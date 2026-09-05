@@ -3,6 +3,11 @@ const PREFIX = 'litecraft:';
 
 export function worldKey(seed) { return `${PREFIX}world:${seed}`; }
 export const SETTINGS_KEY = PREFIX + 'settings';
+/**
+ * Версия настроек. v2 — дальность прорисовки 10 вместо тесных 6: у старых
+ * сохранений она «прилипала» и мир продолжал казаться маленьким.
+ */
+export const SETTINGS_VERSION = 2;
 export const LAST_SEED_KEY = PREFIX + 'lastSeed';
 
 export function saveWorld(seed, data) {
@@ -42,11 +47,16 @@ export function deleteWorld(seed) {
 }
 
 export function saveSettings(obj) {
-  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(obj)); } catch { /* ignore */ }
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...obj, v: SETTINGS_VERSION })); } catch { /* ignore */ }
 }
 
 export function loadSettings() {
-  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') ?? {}; } catch { return {}; }
+  try {
+    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') ?? {};
+    // старая дальность прорисовки не должна переживать обновление мира
+    if (s.v !== SETTINGS_VERSION) { delete s.renderDistance; delete s.mobs; delete s.creative; }
+    return s;
+  } catch { return {}; }
 }
 
 export function saveLastSeed(seed) {

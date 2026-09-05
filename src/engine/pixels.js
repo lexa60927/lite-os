@@ -5,7 +5,7 @@
 import { hash2 } from './noise.js';
 
 export const TILE = 16;      // размер пиксель-арт тайла
-export const PAD = 4;        // отступ для mipmaps (защита от кровотечения)
+export const PAD = 8;        // отступ для mipmaps: 8px дублированной кромки
 export const CELL = TILE + PAD * 2;
 export const GRID = 16;      // тайлов по горизонтали/вертикали
 
