@@ -223,13 +223,6 @@ export class Terrain {
     return null;
   }
 
-  /** Деревенская планировка для смещения от центра (null — улица/пусто). */
-  #cellAt(site, dx, dz) {
-    const ci = Math.floor((dx + V_HALF) / V_CELL), cj = Math.floor((dz + V_HALF) / V_CELL);
-    if (ci < 0 || cj < 0 || ci > 2 || cj > 2) return null;
-    return { site, ci, cj, lx: dx - (ci - 1) * V_CELL, lz: dz - (cj - 1) * V_CELL, cell: site.cells[cj * 3 + ci] };
-  }
-
   /** Застройка деревни: возвращает массив [y, id] для колонки или null. */
   villageColumn(ctx) {
     const { site, cell, ci, cj, lx, lz } = ctx;
@@ -317,7 +310,7 @@ export class Terrain {
   }
 
   treeAt(x, z) {
-    if (this.villageAt(x, z)) return null;        // в деревнях деревьев нет: кроны прорастали бы через крыши
+    if (villageSiteSafe(this, x, z)) return null;  // в деревнях деревьев нет: кроны прорастали бы через крыши
     const r = hash2(x, z, this.seed ^ 0x5bd1e995);
     const c = this.col(x, z);
     const biome = c.biome;
@@ -462,59 +455,68 @@ export class Terrain {
     }
 
     // --- деревни: планировка участка и застройка (пишем поверх рельефа) ---
-    for (let lz = 0; lz < CHUNK; lz++) {
-      for (let lx = 0; lx < CHUNK; lx++) {
-        const x = cx * CHUNK + lx, z = cz * CHUNK + lz;
-        const site = this.villageAt(x, z);
-        if (!site) continue;
-        const ctx = this.#cellAt(site, x - site.cx, z - site.cz);
-        if (!ctx) continue;
-        const rows = this.villageColumn(ctx);
-        const th = heights[lz * CHUNK + lx];
-        let top = site.h;
-        // пещера, съевшая поверхность, не должна оставлять дом над провалом
-        if (!blocks[idx(lx, site.h, lz)]) {
-          let from = site.h;
-          while (from > 0 && !blocks[idx(lx, from - 1, lz)] && site.h - from < 10) from--;
-          for (let y = site.h; y >= from; y--) blocks[idx(lx, y, lz)] = y === site.h ? site.top : B.dirt;
-        }
-        if (th < site.h) {
-          for (let y = th + 1; y <= site.h; y++) blocks[idx(lx, y, lz)] = y === site.h ? site.top : B.dirt;
-        } else if (th > site.h) {
-          for (let y = site.h + 1; y <= th; y++) blocks[idx(lx, y, lz)] = 0;
-          blocks[idx(lx, site.h, lz)] = site.top;
-        }
-        for (const [y, id] of rows) {
-          blocks[idx(lx, y, lz)] = id;
-          if (id !== 0 && y > top) top = y;
-          if (y + 1 > hmax) hmax = y + 1;
-        }
-        heights[lz * CHUNK + lx] = Math.min(HEIGHT - 1, top);
-      }
-    }
-
-    // --- деревья: проходим по расширенной области, пишем только свои блоки ---
-    for (let oz = -3; oz < CHUNK + 3; oz++) {
-      for (let ox = -3; ox < CHUNK + 3; ox++) {
-        const x = cx * CHUNK + ox;
-        const z = cz * CHUNK + oz;
-        const list = this.treeBlocks(x, z);
-        if (!list) continue;
-        for (const [dx, dy, dz, id] of list) {
-          const lx = ox + dx, lz = oz + dz;
-          if (lx < 0 || lz < 0 || lx >= CHUNK || lz >= CHUNK) continue;
-          const y = dy;
-          if (y < 0 || y >= HEIGHT) continue;
-          const i = idx(lx, y, lz);
-          const cur = blocks[i];
-          if (id === B.leaves ? cur === 0 || cur === B.tall_grass : true) {
-            if (id === B.log) blocks[i] = id;
-            else if (cur === 0) { blocks[i] = id; solid++; }
-            if (y + 1 > hmax) hmax = y + 1;
+    // --- деревни: планировка участка и застройка (пишем поверх рельефа) ---
+    // Деревенская застройка не имеет права ронять генерацию чанка.
+    // Было: этот вызов падал с «terrain.villageAt is not a function» (устаревший
+    // экземпляр Terrain после HMR), исключение улетало в ensureChunk, а тот уже
+    // успел положить ЧАСТИЧНЫЙ чанк в кэш — стриминг видел «чанк есть» и больше
+    // к нему не обращался. Итог: мир «сгенерирован», но чанки пустые и невидимые
+    // навсегда. Теперь сбойный участок просто пропускается, чанк всё равно честный.
+    try {
+          for (let lz = 0; lz < CHUNK; lz++) {
+            for (let lx = 0; lx < CHUNK; lx++) {
+              const x = cx * CHUNK + lx, z = cz * CHUNK + lz;
+              const site = villageSiteAt(this, x, z);
+              if (!site) continue;
+              const ctx = cellAt(site, x - site.cx, z - site.cz);
+              if (!ctx) continue;
+              const rows = this.villageColumn(ctx);
+              const th = heights[lz * CHUNK + lx];
+              let top = site.h;
+              // пещера, съевшая поверхность, не должна оставлять дом над провалом
+              if (!blocks[idx(lx, site.h, lz)]) {
+                let from = site.h;
+                while (from > 0 && !blocks[idx(lx, from - 1, lz)] && site.h - from < 10) from--;
+                for (let y = site.h; y >= from; y--) blocks[idx(lx, y, lz)] = y === site.h ? site.top : B.dirt;
+              }
+              if (th < site.h) {
+                for (let y = th + 1; y <= site.h; y++) blocks[idx(lx, y, lz)] = y === site.h ? site.top : B.dirt;
+              } else if (th > site.h) {
+                for (let y = site.h + 1; y <= th; y++) blocks[idx(lx, y, lz)] = 0;
+                blocks[idx(lx, site.h, lz)] = site.top;
+              }
+              for (const [y, id] of rows) {
+                blocks[idx(lx, y, lz)] = id;
+                if (id !== 0 && y > top) top = y;
+                if (y + 1 > hmax) hmax = y + 1;
+              }
+              heights[lz * CHUNK + lx] = Math.min(HEIGHT - 1, top);
+            }
           }
-        }
-      }
-    }
+
+          // --- деревья: проходим по расширенной области, пишем только свои блоки ---
+          for (let oz = -3; oz < CHUNK + 3; oz++) {
+            for (let ox = -3; ox < CHUNK + 3; ox++) {
+              const x = cx * CHUNK + ox;
+              const z = cz * CHUNK + oz;
+              const list = this.treeBlocks(x, z);
+              if (!list) continue;
+              for (const [dx, dy, dz, id] of list) {
+                const lx = ox + dx, lz = oz + dz;
+                if (lx < 0 || lz < 0 || lx >= CHUNK || lz >= CHUNK) continue;
+                const y = dy;
+                if (y < 0 || y >= HEIGHT) continue;
+                const i = idx(lx, y, lz);
+                const cur = blocks[i];
+                if (id === B.leaves ? cur === 0 || cur === B.tall_grass : true) {
+                  if (id === B.log) blocks[i] = id;
+                  else if (cur === 0) { blocks[i] = id; solid++; }
+                  if (y + 1 > hmax) hmax = y + 1;
+                }
+              }
+            }
+            }
+    } catch (e) { genDegraded(this, e); }
 
     // --- трава и цветы на собственном рельефе ---
     for (let lz = 0; lz < CHUNK; lz++) {
@@ -556,6 +558,31 @@ export class Terrain {
  * если после HMR в браузере мир ещё носит старый экземпляр без нового метода:
  * «terrain.villageAt is not a function» в промисе ронял игру на пустом месте.
  */
+  /**
+ * Доступ к планировке деревни, который не может уронить генерацию: устаревший
+ * после HMR экземпляр Terrain не обязан иметь эти методы.
+ */
+function villageSiteAt(terrain, x, z) {
+  try { return typeof terrain.villageAt === 'function' ? terrain.villageAt(x, z) : null; }
+  catch (e) { genDegraded(terrain, e); return null; }
+}
+
+const villageSiteSafe = (terrain, x, z) => !!villageSiteAt(terrain, x, z);
+
+/** Деревенская планировка для смещения от центра (null — улица/пусто). */
+function cellAt(site, dx, dz) {
+  const ci = Math.floor((dx + V_HALF) / V_CELL), cj = Math.floor((dz + V_HALF) / V_CELL);
+  if (ci < 0 || cj < 0 || ci > 2 || cj > 2) return null;
+  return { site, ci, cj, lx: dx - (ci - 1) * V_CELL, lz: dz - (cj - 1) * V_CELL, cell: site.cells[cj * 3 + ci] };
+}
+
+/** О деревенских сбоях сообщаем один раз: молчаливая деградация хуже, чем крик. */
+function genDegraded(terrain, e) {
+  if (terrain && terrain._villageWarned) return;
+  if (terrain) terrain._villageWarned = true;
+  console.warn('застройка деревень пропущена (мир генерируется без неё):', e?.message ?? e);
+}
+
 export function villageNear(world, x, z) {
   const t = world?.terrain;
   return typeof t?.villageAt === 'function' ? !!t.villageAt(Math.floor(x), Math.floor(z)) : false;

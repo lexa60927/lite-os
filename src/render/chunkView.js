@@ -65,7 +65,8 @@ export class ChunkView {
   streamDebug() {
     const w = this.world;
     return { gen: this.stats.gen, mesh: this.stats.mesh, pending: w.dirtyMesh.size,
-      light: w.dirtyLight.size, genErr: this._genErrCount ?? 0, meshErr: this._meshErrCount ?? 0 };
+      light: w.dirtyLight.size, genErr: this._genErrCount ?? 0, meshErr: this._meshErrCount ?? 0,
+      msg: w.lastGenError ?? this._meshErrMsg ?? '' };
   }
 
   /** Обновить потоковую загрузку; вызывать каждый кадр. */
@@ -162,6 +163,7 @@ export class ChunkView {
         this.remesh(cx, cz);
       } catch (e) {
         this._meshErrCount = (this._meshErrCount ?? 0) + 1;
+        this._meshErrMsg = String(e?.message ?? e);
         if (!this._meshErr) { this._meshErr = 1; console.error('меширование чанка не удалось:', cx, cz, e); }
       }
       world.dirtyMesh.delete(ChunkView.key(cx, cz));

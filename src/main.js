@@ -984,6 +984,17 @@ export class Game {
       }
     }
 
+    // Сбой подготовки мира — наружу, в игру. Без консоли и без F3 игрок видит
+    // только «мир пустой», а причину тогда не найдёт никто: молчаливое
+    // проглатывание исключений стоило нам уже двух таких отчётов.
+    const sd = this.chunkView?.streamDebug?.();
+    if (sd && (sd.genErr || sd.meshErr) && this._streamWarned !== sd.msg) {
+      this._streamWarned = sd.msg || 'сбой';
+      console.error('стриминг мира:', sd);
+      this.hud.toast(`Мир не достраивается: ген ${sd.genErr}, меш ${sd.meshErr}`
+        + `${sd.msg ? ` · ${sd.msg}` : ''} — попробуй перезагрузку (Ctrl+Shift+R)`, 'warn');
+    }
+
     // автосохранение и отладка
     if (st.saveT > 0) {
       st.saveT -= dt;

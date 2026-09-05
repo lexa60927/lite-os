@@ -18,6 +18,7 @@ import { ChunkView, streamPlan } from '../src/render/chunkView.js';
 import { buildTiles } from '../src/engine/tiles.js';
 import { CELL, TILE, GRID } from '../src/engine/pixels.js';
 import { CHUNK } from '../src/engine/constants.js';
+import { buildChunkMesh } from '../src/engine/mesher.js';
 
 let fail = 0;
 const bad = (m) => { console.log('✘ ' + m); fail++; };
@@ -90,6 +91,80 @@ const ok = (m) => console.log('✔ ' + m);
   const d = view.streamDebug();
   if (d.genErr || d.meshErr) bad(`сбои в конвейере: ген ${d.genErr}, меш ${d.meshErr}`);
   else ok('ни одной ошибки генерации/меширования');
+}
+
+// ── 3. чанк, где генерация упала, не обязан оставаться дырой навсегда ───────
+// Классика этого проекта: ensureChunk клал ЧАСТИЧНЫЙ чанк в кэш до generate.
+// Исключение внутри генерации (например, «villageAt is not a function» после
+// HMR) оставляло в мире пустую оболочку: getChunk отвечает «чанк есть»,
+// стриминг к нему больше не возвращается, needsMesh не взведён — дыра навечно,
+// при этом chunkCount растёт, т.е. «мир генерируется, но чанки невидимые».
+{
+  const { index } = buildTiles();
+  const atlas = { index, cell: CELL, tile: TILE, grid: GRID };
+  const world = new World(777);
+  const t = world.terrain;
+  const orig = t.generate.bind(t);
+  let thrown = 0;
+  t.generate = (c) => { if (c.cx === 0 && c.cz === 0 && thrown++ < 1) throw new TypeError('terrain.villageAt is not a function'); orig(c); };
+
+  const view = new ChunkView(world, new THREE.Scene(), { solid: new THREE.MeshBasicMaterial(), water: new THREE.MeshBasicMaterial() }, atlas);
+  view.setRenderDistance(3);
+  const pos = { x: 0.5, y: 44, z: 0.5, vx: 0, vz: 0 };
+  for (let i = 0; i < 40; i++) view.update(pos);
+
+  if (!world.getChunk(0, 0)) ok('сбойный чанк не остался пустой оболочкой в кэше (будет пересобран)');
+  else if (world.getChunk(0, 0).generated) ok('сбойный чанк догенерился на повторной попытке');
+  else bad('в кэше лежит сгенерированный-но-пустой чанк: такая дыра не закроется никогда');
+
+  t.generate = orig;
+  for (let i = 0; i < 60; i++) view.update(pos);
+  const c = world.getChunk(0, 0);
+  if (!c || !c.generated) bad('чанк так и не был собран после устранения причины');
+  else {
+    let filled = 0;
+    for (let i = 0; i < c.blocks.length; i++) if (c.blocks[i]) filled++;
+    if (filled < 4000) bad(`чанк собрался, но почти пустой (${filled} блоков) — блоки не записаны`);
+    else ok(`чанк восстановился: ${filled} блоков, hmax ${c.hmax}`);
+    const mesh = view.objects.get(ChunkView.key(0, 0));
+    if (!mesh || (!mesh.solid && !mesh.water)) bad('чанк восстановился, но геометрии так и нет — невидимый мир');
+    else ok('геометрия после восстановления появилась');
+  }
+
+  // бесконечный повторный обход нам не нужен: после 3 попыток чанк отсеивается
+  const w2 = new World(778);
+  w2.terrain.generate = () => { throw new Error('всегда падаю'); };
+  let tries = 0;
+  for (let i = 0; i < 10; i++) { try { w2.ensureChunk(1, 1); } catch { tries++; } }
+  if (tries !== 10) bad(`падения считаются неверно: ${tries} из 10`);
+  else ok('падения считаются');
+  if (w2.chunks.size) bad('падящий чанк всё-таки осел в кэше');
+  else ok('падящий чанк не забивает кэш пустотой');
+  if (String(w2.lastGenError).includes('всегда падаю')) ok('последняя ошибка генерации доступна UI: ' + w2.lastGenError);
+  else bad(`lastGenError не заполнен: ${w2.lastGenError}`);
+}
+
+// ── 4. устаревший после HMR Terrain обязан ронять деревни, а не мир ─────────
+{
+  const { index } = buildTiles();
+  const world = new World(4242);
+  const t = world.terrain;
+  for (const m of ['villageAt', 'villageSite', 'villageColumn']) { try { delete t[m]; } catch {} }
+  t.villageSiteSafeDeleted = true;
+  let chunk = null, err = null;
+  try {
+    chunk = world.ensureChunk(2, 1);
+  } catch (e) { err = e; }
+  if (err) bad(`нет villageAt → генерация падает: ${err.message} — мир станет прозрачным`);
+  else {
+    let solid = 0;
+    for (let i = 0; i < chunk.blocks.length; i++) if (chunk.blocks[i]) solid++;
+    if (solid < 4000) bad(`чанк без деревенских методов почти пустой (${solid} блоков) — генерация деградировала в дыру`);
+    else ok(`Terrain без деревенских методов: чанк собран полностью (${solid} блоков), без исключений`);
+    const mesh = buildChunkMesh(world, chunk, { index, cell: CELL, tile: TILE, grid: GRID });
+    if (!mesh.solid || mesh.solid.quads < 500) bad(`геометрия не построена: ${mesh.solid?.quads ?? 0} квадов`);
+    else ok(`меширование такого чанка даёт ${mesh.solid.quads} квадов`);
+  }
 }
 
 console.log(fail ? `\n✘ стриминг: ${fail} проблем` : '\nстриминг не оставляет дыр');

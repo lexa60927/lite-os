@@ -54,11 +54,28 @@ export class World {
     const k = this.key(cx, cz);
     let c = this.chunks.get(k);
     if (c) return c;
+    const failed = this._genFail?.get(k) ?? 0;
+    if (failed >= 3) throw new Error(`чанк ${cx},${cz} не генерируется (3 попытки): ${this.lastGenError ?? 'см. консоль'}`);
     c = new Chunk(cx, cz);
+    // Порядок важен: в кэш чанк попадает только после удачной генерации.
+    // раньше set(k, c) шёл ДО generate, и любое исключение внутри генерации
+    // оставляло в мире пустой чанк-оболочку: getChunk возвращает её, стриминг
+    // считает «чанк есть» и больше к нему не возвращается, needsMesh не взведён —
+    // то есть дыра навсегда. Мир при этом «генерируется»: chunkCount растёт,
+    // а видеть нечего. Это и были «прозрачные чанки».
+    try {
+      this.terrain.generate(c);
+      this.applyEdits(c);
+      this.finalize(c);
+    } catch (e) {
+      this.chunks.delete(k);
+      if (this._cacheKey === k) this._cacheKey = -1;
+      this._genFail = (this._genFail ?? new Map()).set(k, failed + 1);
+      this.lastGenError = String(e?.message ?? e);
+      throw e;
+    }
+    this._genFail?.delete(k);
     this.chunks.set(k, c);
-    this.terrain.generate(c);
-    this.applyEdits(c);
-    this.finalize(c);
     c.generated = true;
     c.needsMesh = true;
     this.stats.generated++;
@@ -341,6 +358,7 @@ export class World {
   removeChunk(cx, cz) {
     const k = this.key(cx, cz);
     this.chunks.delete(k);
+    this._genFail?.delete(k);          // при возврате в область видимости чанк получает свежие попытки
     this.dirtyMesh.delete(k);
     this.dirtyLight.delete(k);
     if (this._cacheKey === k) this._cacheKey = -1;
