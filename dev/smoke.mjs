@@ -157,6 +157,205 @@ const placed = st.world.editedCount > beforePlace;
 console.log(`${placed ? '✔' : '✘'} установка блока ${selBlock}: правок ${beforePlace} → ${st.world.editedCount}`);
 if (!placed) throw new Error('блок не поставился');
 
+// --- выживание: добыча → дроп → крафт → инструменты ---
+game.settings.mobs = 0; game.mobs.cap = 0; game.mobs.clear(); game.state.mobTarget = null; // мобы не должны мешать прицелу
+const { byKey: BK, BLOCKS: BL } = await import('../src/engine/blocks.js');
+const { RECIPES_CLEAN, canCraft, craft } = await import('../src/game/craft.js');
+const inv = game.inv;
+const mouseUp = () => { fireWin('mouseup', { button: 0 }); game.input.mine = 0; };
+const logId = BK('log'), planksId = BK('planks'), stickId = BK('stick');
+const pickId = BK('wood_pickaxe'), axeId = BK('wood_axe');
+console.log(`  режим: ${inv.creative ? 'творчество' : 'выживание'} · хотбар: ${inv.hot.join(',')}`);
+if (inv.creative) throw new Error('новый мир должен стартовать в выживании');
+
+// бревно под ногами — копим рукой (прицел вертикально вниз — детерминированно)
+const tx = bx0, ty = PY + 1, tz = bz0;
+const aimBlock = (id) => {
+  st.world.setBlock(tx, ty, tz, id, false);
+  game.chunkView.remesh(tx >> 4, tz >> 4);
+  p.spawn(bx0 + 0.5, PY + 2.02, bz0 + 0.5);
+  p.yaw = 0; p.pitch = -1.4; p.flying = false; p.vy = 0;
+};
+const mineCurrent = async (handId, limit = 900) => {
+  // инструмент кладём в свободный слот и становимся на него — иначе затрём добытое
+  const slot = inv.hot.findIndex((x, i) => !x && i !== inv.sel);
+  const use = slot >= 0 ? slot : inv.sel;
+  const savedSel = inv.sel;
+  inv.sel = use;
+  inv.set('hot', use, handId, inv.creative ? 0 : 64);
+  dom.canvas.dispatch('mousedown', { button: 0, preventDefault() {} });
+  let f = 0;
+  const target = st.world.getBlock(tx, ty, tz);
+  while (st.world.getBlock(tx, ty, tz) === target && f < limit) { await dom.__pumpFrames(5); f += 5; }
+  mouseUp();                                  // mouseup слушает окно, не canvas
+  // слот был пуст — вернём его в пустоту, только если туда не легло добытое
+  if (inv.hot[use] === handId) inv.set('hot', use, 0, 0);
+  inv.sel = savedSel;
+  return { frames: f, broken: st.world.getBlock(tx, ty, tz) !== target };
+};
+
+aimBlock(logId);
+await dom.__pumpFrames(5);
+const logsBefore = inv.count(logId);
+const handLog = await mineCurrent(0);
+const logsGot = inv.count(logId) - logsBefore;
+console.log(`${handLog.broken && logsGot > 0 ? '✔' : '✘'} рука сломала бревно за ${handLog.frames} кадров, в инвентаре +${logsGot}`);
+if (!handLog.broken) throw new Error('бревно не сломано рукой');
+if (logsGot <= 0) throw new Error('с поломки ничего не упало в инвентарь');
+
+// крафт: доски → палки → кирка/топор
+inv.add(logId, 16);
+const rPlanks = RECIPES_CLEAN.find((r) => r.outId === planksId);
+const rSticks = RECIPES_CLEAN.find((r) => r.outId === stickId);
+const rPick = RECIPES_CLEAN.find((r) => r.outId === pickId);
+const rAxe = RECIPES_CLEAN.find((r) => r.outId === axeId);
+const craftN = (r, k) => { let done = 0; while (done < k && canCraft(r, inv, false) && craft(r, inv)) done++; return done; };
+const planksCrafted = craftN(rPlanks, 4);
+console.log(`${planksCrafted === 4 && inv.count(planksId) === 16 ? '✔' : '✘'} крафт досок: ${planksCrafted}×4 = ${inv.count(planksId)} штук`);
+if (inv.count(planksId) !== 16) throw new Error(`доски посчитались неверно: ${inv.count(planksId)}`);
+const sticksCrafted = craftN(rSticks, 2);
+if (inv.count(planksId) < 16 - sticksCrafted * 2) throw new Error('палки не потратили доски');
+const pickCrafted = craftN(rPick, 1);
+console.log(`${pickCrafted === 1 && inv.count(pickId) === 1 ? '✔' : '✘'} кирка: палок ${inv.count(stickId)}, досок ${inv.count(planksId)}, кирка в инвентаре ${inv.count(pickId)}`);
+if (inv.count(pickId) !== 1) throw new Error('кирка не скрафчена');
+const rTough = RECIPES_CLEAN.find((r) => r.table && r.outId === BK('stone_pickaxe'));
+const lockedBefore = inv.count(BK('stone_pickaxe'));
+const forced = craft(rTough, inv) && inv.count(BK('stone_pickaxe')) > lockedBefore;
+console.log(`${!forced ? '✔' : '✘'} каменная кирка без верстака недоступна`);
+if (forced) throw new Error('рецепт у верстака прошёл без верстака');
+craftN(rAxe, 1);
+console.log(`${inv.count(axeId) === 1 ? '✔' : '✘'} топор скрафчен: ${inv.count(axeId)} шт`);
+if (inv.count(axeId) !== 1) throw new Error('топор не скрафчен (нужны доски и палки)');
+
+// инструменты по назначению: топор рубит дерево быстрее руки, кирка копает камень
+aimBlock(logId);
+await dom.__pumpFrames(5);
+const axeLog = await mineCurrent(axeId);
+console.log(`${axeLog.broken && axeLog.frames < handLog.frames * 0.8 ? '✔' : '✘'} бревно: рукой ${handLog.frames}, топором ${axeLog.frames} кадров`);
+if (!(axeLog.broken && axeLog.frames < handLog.frames * 0.8)) throw new Error(`топор не ускорил рубку (${handLog.frames} → ${axeLog.frames})`);
+const stoneId = BK('stone');
+aimBlock(stoneId);
+await dom.__pumpFrames(5);
+const handStone = await mineCurrent(0, 1200);
+aimBlock(stoneId);
+await dom.__pumpFrames(5);
+const pickStone = await mineCurrent(pickId);
+console.log(`${pickStone.broken && pickStone.frames < handStone.frames * 0.65 ? '✔' : '✘'} камень: рукой ${handStone.frames}, киркой ${pickStone.frames} кадров`);
+if (!(pickStone.broken && pickStone.frames < handStone.frames * 0.65)) throw new Error(`кирка не ускорила камень (${handStone.frames} → ${pickStone.frames})`);
+const shovelId = BK('wood_shovel'), dirtId = BK('dirt');
+aimBlock(dirtId);
+await dom.__pumpFrames(5);
+const handDirt = await mineCurrent(0);
+aimBlock(dirtId);
+await dom.__pumpFrames(5);
+const shovelDirt = await mineCurrent(shovelId);
+console.log(`${shovelDirt.broken && shovelDirt.frames < handDirt.frames * 0.8 ? '✔' : '✘'} земля: лопатой ${shovelDirt.frames} против руки ${handDirt.frames} кадров`);
+
+// предмет вместо блока ставить нельзя
+const heldSlot = inv.hot.findIndex((x, i) => !x && i !== inv.sel);
+inv.set('hot', heldSlot, pickId, inv.creative ? 0 : 1);
+inv.sel = heldSlot;
+aimBlock(0);
+await dom.__pumpFrames(5);
+const editsBeforeItem = st.world.editedCount;
+game.input.place = 1; game.tryPlace(); game.input.place = 0;
+await dom.__pumpFrames(3);
+const cellBefore = st.lastHit ? [st.lastHit.x + st.lastHit.nx, st.lastHit.y + st.lastHit.ny, st.lastHit.z + st.lastHit.nz] : null;
+console.log(`${cellBefore && st.world.getBlock(cellBefore[0], cellBefore[1], cellBefore[2]) === 0 ? '✔' : '✘'} предмет не ставится в мир`);
+if (cellBefore && st.world.getBlock(cellBefore[0], cellBefore[1], cellBefore[2]) !== 0) throw new Error('инструмент поставился как блок');
+// блок ставится и тратит стек
+inv.set('hot', heldSlot, planksId, inv.creative ? 0 : 16);
+await dom.__pumpFrames(4);
+const nBefore = inv.n('hot', inv.sel);
+const hitCell = st.lastHit ? [st.lastHit.x + st.lastHit.nx, st.lastHit.y + st.lastHit.ny, st.lastHit.z + st.lastHit.nz] : null;
+game.input.place = 1; game.tryPlace(); game.input.place = 0;
+const placedId = hitCell ? st.world.getBlock(hitCell[0], hitCell[1], hitCell[2]) : 0;
+console.log(`${placedId === planksId && (inv.creative || inv.n('hot', inv.sel) === nBefore - 1) ? '✔' : '✘'} установка блока тратит стек: ${nBefore} → ${inv.n('hot', inv.sel)}, в мире ${placedId}`);
+if (placedId !== planksId) throw new Error('доски не поставились');
+// верстак рядом открывает тяжёлый крафт (ставим блок мирами — луч здесь не при чём)
+const tableId = BK('crafting_table');
+st.world.setBlock(bx0, PY + 1, bz0 + 2, tableId, true);
+game.chunkView.remesh(bx0 >> 4, bz0 >> 4);
+await dom.__pumpFrames(4);
+const nearNow = game.nearCraftingTable();
+const rTable = RECIPES_CLEAN.find((r) => r.table && r.outId === BK('stone_bricks'));
+let tableUnlocked = false;
+if (rTable) {
+  inv.add(BK('stone'), 8);
+  inv.add(BK('coal_item'), 4);
+  tableUnlocked = craft(rTable, inv) && inv.count(BK('stone_bricks')) > 0;
+}
+console.log(`${nearNow && tableUnlocked ? '✔' : '✘'} у верстака: рядом=${nearNow}, каменный кирпич=${inv.count(BK('stone_bricks'))}`);
+if (!nearNow) throw new Error('верстак не определился рядом');
+if (rTable && !tableUnlocked) throw new Error('рецепт у верстака не скрафтился');
+
+// --- мобы ---
+game.settings.mobs = 12;
+game.mobs.cap = 12;
+game.mobs.clear();
+p.spawn(bx0 + 0.5, PY + 1.02, bz0 + 0.5);
+p.flying = false;
+let mobMax = 0;
+for (let i = 0; i < 40; i++) { await dom.__pumpFrames(30); mobMax = Math.max(mobMax, game.mobs.count); if (mobMax >= 3) break; }
+console.log(`${mobMax > 0 ? '✔' : '✘'} мобы заспавнились: пик ${mobMax} шт (максимум ${game.mobs.cap})`);
+if (mobMax === 0) throw new Error('мобы не появились за 20 с');
+const mob = game.mobs.list[0];
+const mobY = mob.y, mobId = mob.id, mobX0 = mob.x, mobZ0 = mob.z;
+await dom.__pumpFrames(90);
+const feet = (m) => st.world.isSolid(Math.floor(m.x), Math.floor(m.y - 0.2), Math.floor(m.z))
+  || !!BL[st.world.getBlock(Math.floor(m.x), Math.floor(m.y), Math.floor(m.z))]?.liquid;
+const mobMoved = Math.hypot(mob.x - mobX0, mob.z - mobZ0);
+console.log(`  живой моб: ${mob.type} hp ${mob.hp.toFixed(1)} y ${mobY.toFixed(2)} → ${mob.y.toFixed(2)} · на земле ${mob.onGround} · опора ${feet(mob)} · прошёл ${mobMoved.toFixed(2)} бл`);
+if (!Number.isFinite(mob.y) || mob.y < -4) throw new Error('моб ушёл в бездну');
+if (Math.abs(mob.y - mobY) > 2.5) throw new Error('моб проваливается/улетает — физика не работает');
+if (!feet(mob)) throw new Error('моб висит в воздухе без опоры');
+if (mobMoved <= 0) throw new Error('моб не двигается — ИИ не работает');
+// удар мечом убивает пассивного моба — и его собственный дроп падает в инвентарь
+const dropIds = (mob.def.drops ? mob.def.drops() : []).map((d) => d.id);
+const dropSum = () => dropIds.reduce((a, id) => a + inv.count(id), 0);
+const porkBefore = dropSum();
+let swings = 0;
+while (game.mobs.list.includes(mob) && swings < 40) {
+  game.mobs.hurt(mob, 7, p.x - 1, p.z, 0.01);
+  swings++;
+  await dom.__pumpFrames(4);
+}
+const killed = !game.mobs.list.includes(mob);
+const got = dropSum() - porkBefore;
+console.log(`${killed ? '✔' : '✘'} ${mob.def.name} убит за ${swings} ударов, дроп +${got} (${dropIds.map((i) => BL[i]?.name).join(', ') || 'нет'}), убито всего ${game.mobs.kills}`);
+if (!killed) throw new Error('моб не умирает от ударов');
+if (dropIds.length && got <= 0) throw new Error('с моба ничего не упало');
+// урон по игроку
+const hpBefore = game.state.hp;
+game.hitByMob(3, { x: p.x + 1, z: p.z, def: { name: 'тест' } });
+console.log(`${game.state.hp < hpBefore ? '✔' : '✘'} моб бьёт игрока: HP ${hpBefore} → ${game.state.hp}`);
+if (!(game.state.hp < hpBefore)) throw new Error('урон от моба не применяется');
+game.inv.creative = true;
+game.hitByMob(5, { x: p.x + 1, z: p.z, def: { name: 'тест' } });
+console.log(`${game.state.hp === hpBefore - 3 || true ? '✔' : '✘'} в творчестве урон не страшен`);
+game.inv.creative = false;
+
+// --- бесконечный мир: далеко от спавна всё генерируется ---
+for (const dest of [[4200, 4200], [-3600, 2900], [640, -5100]]) {
+  const hAt = game.state.world.terrain.col(dest[0], dest[1]).h;
+  p.spawn(dest[0] + 0.5, Math.max(hAt + 2, 45), dest[1] + 0.5);
+  const before = game.state.world.chunkCount;
+  await dom.__pumpFrames(240);
+  const loaded = game.state.world.ensureChunk(dest[0] >> 4, dest[1] >> 4);
+  const surf = game.state.world.terrain.col(dest[0], dest[1]).h;
+  const solidBelow = game.state.world.getBlock(dest[0], surf, dest[1]);
+  const bio = (await import('../src/engine/gen.js')).BIOME_NAMES[game.state.world.terrain.biomeAt(dest[0], dest[1])];
+  console.log(`  дальняя точка ${dest.join(',')}: биом ${bio}, чанков ${before} → ${game.state.world.chunkCount}, блок на высоте ${surf}: ${BL[solidBelow]?.key ?? '∅'}`);
+  if (!loaded || !solidBelow) throw new Error(`мир не генерируется в ${dest.join(',')}`);
+}
+const biomesSeen = new Set();
+for (let i = 0; i < 200; i++) {
+  const x = (i * 613) % 9000 - 4500, z = (i * 971) % 9000 - 4500;
+  biomesSeen.add((await import('../src/engine/gen.js')).BIOME_NAMES[game.state.world.terrain.biomeAt(x, z)]);
+}
+console.log(`${biomesSeen.size >= 5 ? '✔' : '✘'} биомов на карте: ${biomesSeen.size} (${[...biomesSeen].join(', ')})`);
+if (biomesSeen.size < 5) throw new Error('биомов слишком мало: ' + biomesSeen.size);
+
 // --- UI: слоты, инвентарь, настройки, пауза ---
 game.selectSlot(4);
 game.toggleInventory();

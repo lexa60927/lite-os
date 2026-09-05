@@ -22,7 +22,7 @@ function hexToRgb(hex) {
 }
 
 /** color + яркостной дельта → [r,g,b] */
-function tint(color, d = 0) {
+export function tint(color, d = 0) {
   const c = typeof color === 'string' ? hexToRgb(color) : color;
   return [c[0] + d, c[1] + d, c[2] + d];
 }
@@ -79,6 +79,50 @@ export class PixelTile {
         const c = colors[(r * colors.length) | 0] ?? colors[0];
         const d = (hash2(x + 7, y * 3 + 1, seed + 99) - 0.5) * amount;
         this.set(x, y, tint(c, d));
+      }
+    }
+    return this;
+  }
+
+  /**
+   * Заливка *плавным* низкочастотным полем (интерполяция coarse-решётки).
+   * Даёт пятна по 3-6 px, как в Minecraft, а не «телевизионный» шум 1px,
+   * который на расстоянии складывается в грязь.
+   */
+  soft(colors, seed = 0, amount = 8, cell = 5) {
+    const sm = (v) => v * v * (3 - 2 * v);
+    const g = (ix, iy) => hash2(ix, iy, seed);
+    for (let y = 0; y < TILE; y++) {
+      for (let x = 0; x < TILE; x++) {
+        const fx = x / cell, fy = y / cell;
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const tx = sm(fx - x0), ty = sm(fy - y0);
+        const a = g(x0, y0), b = g(x0 + 1, y0), c = g(x0, y0 + 1), d = g(x0 + 1, y0 + 1);
+        const v = (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+        const col = colors[(v * colors.length) | 0] ?? colors[0];
+        this.set(x, y, tint(col, (v - 0.5) * amount));
+      }
+    }
+    return this;
+  }
+
+  /** Мелкое пер-пиксельное зерно — только чтобы разбить ровные заливки. */
+  grain(amount = 5, seed = 0) {
+    for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) {
+      this.shade(x, y, (hash2(x * 5 + 1, y * 7 + 3, seed) - 0.5) * amount);
+    }
+    return this;
+  }
+
+  /** Галька/вкрапления: аккуратные пятна size×size со светлой гранью сверху. */
+  pebbles(color, count, seed = 0, size = 2, hi = 16, lo = -14) {
+    for (let i = 0; i < count; i++) {
+      const cx = 1 + ((hash2(i * 7 + 3, i * 5 + 11, seed) * (TILE - 2)) | 0);
+      const cy = 1 + ((hash2(i * 13 + 5, i * 3 + 7, seed + 21) * (TILE - 2)) | 0);
+      const w = 1 + ((hash2(i, i + 9, seed + 3) * size) | 0);
+      const h = 1 + ((hash2(i + 4, i * 2 + 1, seed + 5) * size) | 0);
+      for (let y = cy; y < cy + h; y++) for (let x = cx; x < cx + w; x++) {
+        this.set(x, y, tint(color, (y === cy || x === cx) ? hi : (y === cy + h - 1 || x === cx + w - 1) ? lo : 0));
       }
     }
     return this;

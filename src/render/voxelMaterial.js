@@ -7,16 +7,21 @@ import * as THREE from 'three';
 
 export const VOXEL_VERT = /* glsl */`
 attribute vec4 light;
+attribute vec3 tint;
 varying vec4 vLight;
+varying vec3 vTint;
 varying vec2 vUv;
 varying float vFog;
 uniform float uTime;
 uniform float uWave;
 uniform float uFogDensity;
+uniform float uFogStart;
+uniform float uFogEnd;
 
 void main() {
   vUv = uv;
   vLight = light;
+  vTint = tint;
   vec3 p = position;
   vec4 world = modelMatrix * vec4(p, 1.0);
   if (uWave > 0.5 && light.w > 0.5) {
@@ -24,7 +29,11 @@ void main() {
   }
   vec4 mv = viewMatrix * world;
   float d = length(mv.xyz);
-  vFog = 1.0 - exp(-uFogDensity * uFogDensity * d * d);
+  // Поздний линейный туман: до uFogStart мир абсолютно чистый, плотнеет только
+  // к границе прокрутки — так мир читается большим, а край чанков не виден.
+  float lin = clamp((d - uFogStart) / max(1.0, uFogEnd - uFogStart), 0.0, 1.0);
+  float expf = 1.0 - exp(-uFogDensity * uFogDensity * d * d);
+  vFog = clamp(max(lin * lin, expf), 0.0, 1.0);
   gl_Position = projectionMatrix * mv;
   gl_PointSize = 1.0;
 }
@@ -42,6 +51,7 @@ uniform float uAlpha;
 uniform float uAlphaTest;
 uniform float uExposure;
 varying vec4 vLight;
+varying vec3 vTint;
 varying vec2 vUv;
 varying float vFog;
 
@@ -53,7 +63,7 @@ void main() {
   float blk = vLight.z;
   vec3 skyLight = uAmbient + uSunColor * (uSun * sky);
   vec3 lit = skyLight * occ + uTorch * blk * (0.25 + 0.75 * occ);
-  vec3 col = tex.rgb * lit;
+  vec3 col = tex.rgb * vTint * lit;
   col = clamp(col, 0.0, 1.45) * uExposure;
   col = mix(col, uFogColor, clamp(vFog, 0.0, 1.0));
   gl_FragColor = vec4(col, uAlpha);
@@ -70,6 +80,8 @@ export function createVoxelMaterials(atlas) {
     uTorch: { value: new THREE.Color(1.0, 0.58, 0.22) },
     uFogColor: { value: new THREE.Color(0.72, 0.85, 0.98) },
     uFogDensity: { value: 0.008 },
+    uFogStart: { value: 70 },
+    uFogEnd: { value: 110 },
     uExposure: { value: 1.0 },
   };
 

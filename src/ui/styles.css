@@ -191,3 +191,36 @@ details.controls summary { cursor: pointer; color: var(--muted); font-size: 13px
   #hp { bottom: 76px; }
   #blockname { bottom: 96px; }
 }
+
+/* ---------- инвентарь: две колонки, крафт, палитра ---------- */
+#inventory .panel.box.wide { max-width: 940px; }
+.inv-cols { display: flex; gap: 18px; align-items: flex-start; }
+.inv-left { flex: 0 0 auto; }
+.inv-right { flex: 1 1 auto; min-width: 260px; }
+.slots27 { display: grid; grid-template-columns: repeat(9, 44px); gap: 4px; }
+.slots27 .slot { width: 44px; height: 44px; }
+.cursor-line { margin-top: 8px; min-height: 16px; }
+.craft-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow: auto; margin: 6px 0 12px; padding-right: 4px; }
+.craft-row {
+  display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.craft-row.ok { border-color: rgba(140, 220, 120, 0.5); background: rgba(40, 70, 30, 0.35); }
+.craft-row img { width: 26px; height: 26px; image-rendering: pixelated; flex: 0 0 auto; }
+.craft-row .cname { flex: 1 1 auto; font-size: 12px; }
+.craft-row .cneed { color: #cfcfcf; font-size: 11px; }
+.craft-row button { padding: 3px 9px; font-size: 11px; }
+.craft-row.locked .cneed { color: #e0a4a4; }
+.palette { grid-template-columns: repeat(7, 40px); max-height: 190px; overflow: auto; }
+.palette .slot { width: 40px; height: 40px; cursor: pointer; }
+.palette .slot:hover { outline: 1px solid rgba(255,255,255,0.35); }
+.slot .cnt {
+  position: absolute; right: 3px; bottom: 1px; font: 700 11px/1 ui-monospace, monospace;
+  color: #fff; text-shadow: 1px 1px 0 #000, -1px 1px 0 #000;
+}
+.slot { position: relative; }
+@media (max-width: 900px) {
+  .inv-cols { flex-direction: column; }
+  .slots27 { grid-template-columns: repeat(9, 38px); }
+  .slots27 .slot { width: 38px; height: 38px; }
+}

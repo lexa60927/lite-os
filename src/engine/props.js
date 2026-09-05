@@ -18,6 +18,11 @@ export const FULL_BRIGHT = new Uint8Array(n);
 export const REPLACEABLE = new Uint8Array(n);
 export const LIGHT = new Float32Array(n);
 export const INSET = new Float32Array(n);
+export const ITEM = new Uint8Array(n);
+/** Блок берёт цвет из BIOME_TINT (трава, листва, растения). */
+export const TINTED = new Uint8Array(n);
+/** Жидкость — свой (более слабый) оттенок биома. */
+export const WATER_TINT = new Uint8Array(n);
 
 for (let i = 0; i < n; i++) {
   const def = BLOCKS[i];
@@ -29,6 +34,9 @@ for (let i = 0; i < n; i++) {
   REPLACEABLE[i] = f(i, def, 'replaceable');
   LIGHT[i] = def.light || 0;
   INSET[i] = def.inset || 0;
+  ITEM[i] = def.render === 'item' ? 1 : 0;
+  TINTED[i] = def.tinted ? 1 : 0;
+  WATER_TINT[i] = def.liquid ? 1 : 0;
   RENDER[i] = def.render === 'cube' ? R_CUBE
     : def.render === 'liquid' ? R_LIQUID
       : def.render === 'cross' ? R_CROSS

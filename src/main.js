@@ -14,7 +14,7 @@ import { Particles } from './render/particles.js';
 import { ViewModel, BlockTarget } from './render/viewmodel.js';
 
 import { World } from './engine/world.js';
-import { BLOCKS, AIR } from './engine/blocks.js';
+import { AIR, BLOCKS, byKey, damageOf, dropOf, isItem, mineMultiplier } from './engine/blocks.js';
 import { CHUNK, HEIGHT, blockKey } from './engine/constants.js';
 import { DEFAULT_SEED } from './engine/gen.js';
 import { seedFromString } from './engine/noise.js';
@@ -27,6 +27,9 @@ import { Audio } from './game/audio.js';
 import { saveWorld, loadWorld, listWorlds, deleteWorld, saveSettings, loadSettings, saveLastSeed, loadLastSeed, debounce } from './game/save.js';
 import { Hud, DEFAULT_SETTINGS } from './ui/hud.js';
 import { installTouch } from './ui/touch.js';
+import { Inventory, STACK } from './game/inventory.js';
+import { RECIPES_CLEAN, canCraft, craft } from './game/craft.js';
+import { Mobs } from './game/mobs.js';
 
 const HOTBAR_DEFAULT = ['grass', 'dirt', 'stone', 'cobblestone', 'planks', 'log', 'glass', 'torch', 'glowstone'];
 const FIXED = 1 / 60;
@@ -70,6 +73,22 @@ export class Game {
     };
 
     this.blockTint = this.computeTints();
+    this.inv = new Inventory();
+    this.state.hotbar = this.inv.hot;
+    this.state.counts = this.inv.hotN;
+    this.state.sel = this.inv.sel;
+    this.attackCd = 0;
+    this.state.mobTarget = null;
+    this.mobs = new Mobs({
+      world: null,
+      scene: this.scene,
+      material: this.materials.solid,
+      atlas: this.atlas,
+      particles: this.particles,
+      audio: this.audio,
+      onPlayerHit: (dmg, mob) => this.hitByMob(dmg, mob),
+      onDrop: (id, n) => this.pickup(id, n),
+    });
     this.debouncedSave = debounce(() => this.save(), 1500);
     this.applySettings(null, true);
     this.bindUI();
@@ -121,27 +140,16 @@ export class Game {
     document.getElementById('resume').onclick = () => this.resume();
     document.getElementById('save-now').onclick = () => { this.save(true); };
     document.getElementById('pause-quit').onclick = () => { this.save(); this.toMenu(); };
-    this.hud.buildHotbar(this.state.hotbar, this.state.sel, (i, how) => {
+    this.hud.onHotbarSelect = (i, how) => {
       if (this.inventoryOpen) {
         this.invTarget = i;
-        this.hud.selectSlot(i);
-        this.hud.el.invHotbar.querySelectorAll('.slot').forEach((s, n) => s.classList.toggle('sel', n === i));
+        this.hud.markInventorySelection(i);
       } else {
         this.selectSlot(i);
         if (how === 'click') this.resume();
       }
-    });
-    this.hud.buildInventory((id) => {
-      const slot = this.invTarget ?? this.state.sel;
-      this.state.hotbar[slot] = id;
-      this.hud.buildHotbar(this.state.hotbar, slot, this.hud.onHotbarChange);
-      this.hud.selectSlot(slot);
-      this.hud.el.invHotbar.querySelectorAll('.slot').forEach((s, n) => s.classList.toggle('sel', n === slot));
-      this.viewModel.setBlock(this.state.hotbar[this.state.sel]);
-      this.hud.showBlockName(id);
-      this.audio.ui('click');
-      this.scheduleSave();
-    });
+    };
+    this.hud.buildHotbar(this.inv.hot, this.inv.sel, this.hud.onHotbarSelect, null);
     window.__hudHover = () => this.audio.ui('hover');
   }
 
@@ -189,6 +197,7 @@ export class Game {
         input: this.input,
         api: {
           toggleFly: () => this.toggleFly(),
+          toggleInv: () => this.toggleInventory(),
           place: () => this.tryPlace(),
           onMineStart: () => { this.input.mine = 1; },
           onMineEnd: () => { this.input.mine = 0; },
@@ -225,22 +234,19 @@ export class Game {
     this.state.world = world;
     this.state.seed = seed;
     this.state.time = save?.time ?? 0.28;
-    if (Array.isArray(save?.hotbar) && save.hotbar.length === 9) {
-      this.state.hotbar = save.hotbar.map((v) => +v || 0);
-      this.hud.buildHotbar(this.state.hotbar, this.state.sel, this.hud.onHotbarChange);
-      this.hud.selectSlot(this.state.sel);
-    }
+    void 0;
 
     this.player = new Player(world);
     const spawn = save?.spawn ?? world.findSpawn();
     this.player.spawn(spawn[0], spawn[1], spawn[2]);
     if (save?.yaw !== undefined) { this.player.yaw = save.yaw; this.player.pitch = save.pitch; }
     if (save?.hp !== undefined) this.state.hp = save.hp;
+    this.mobs.world = world;
+    this.mobs.clear();
     this.chunkView = new ChunkView(world, this.scene, this.materials, this.atlas);
     this.chunkView.setRenderDistance(this.settings.renderDistance);
-    this.hud.buildHotbar(this.state.hotbar, this.state.sel, this.hud.onHotbarChange);
-    this.hud.selectSlot(this.state.sel);
-    this.viewModel.setBlock(this.state.hotbar[this.state.sel]);
+    this.setupInventory(!!save ? save.creative : undefined, save?.inv ?? save?.hotbar);
+    this.syncHotbar();
     this.hud.setHealth(this.state.hp);
 
 
@@ -248,12 +254,13 @@ export class Game {
     this.state.paused = false;
     this.state.loading = true;
     this.hud.show('loading');
-    await this.prepare(Math.min(this.settings.renderDistance, 4));
+    await this.prepare(Math.min(this.settings.renderDistance, 5));
     this.state.loading = false;
     // спавн мог оказаться внутри кроны/скалы — ищем открытую клетку по реальным блокам
     const spot = world.findOpenSpot(Math.floor(this.player.x), Math.floor(this.player.z));
     if (spot) this.player.spawn(spot[0], spot[1], spot[2]);
     else this.settlePlayer();
+    if (!this.inv.creative) this.hud.toast('Выживание: бей дерево ЛКМ, E — инвентарь и крафт', '');
     this.state.running = true;
     this.state.hp = Math.max(1, this.state.hp);
     this.audio.resume();
@@ -371,7 +378,7 @@ export class Game {
     }
     if (code === 'KeyN') { st.time = (st.time + 0.25) % 1; this.hud.toast('Время перемотано'); return; }
     if (code === 'KeyR') { this.unstick(); return; }
-    if (code === 'KeyQ') { st.hotbar[st.sel] = AIR; this.hud.buildHotbar(st.hotbar, st.sel, this.hud.onHotbarChange); this.hud.selectSlot(st.sel); this.viewModel.setBlock(AIR); return; }
+    if (code === 'KeyQ') { if (!this.inv.creative) this.inv.set('hot', this.inv.sel, this.inv.id('hot', this.inv.sel), Math.max(0, this.inv.n('hot', this.inv.sel) - 1)); else this.inv.set('hot', this.inv.sel, AIR, 0); this.syncHotbar(); return; }
     if (code.startsWith('Digit')) {
       const n = +code.slice(5);
       if (n >= 1 && n <= 9) this.selectSlot(n - 1);
@@ -413,36 +420,194 @@ export class Game {
   }
 
   selectSlot(i) {
-    this.state.sel = i;
-    this.hud.buildHotbar(this.state.hotbar, i, this.hud.onHotbarChange);
-    this.hud.selectSlot(i);
-    this.viewModel.setBlock(this.state.hotbar[i]);
-    this.hud.showBlockName(this.state.hotbar[i]);
+    const n = ((i | 0) % 9 + 9) % 9;
+    this.inv.sel = n;
+    this.state.sel = n;
+    this.hud.selectSlot(n);
+    this.viewModel.setBlock(this.inv.hot[n]);
+    this.hud.showBlockName(this.inv.hot[n]);
     this.state.breakProgress = 0;
     this.target.setBreakProgress(0);
+  }
+
+  /** Перерисовать хотбар/руку по текущему состоянию инвентаря. */
+  syncHotbar() {
+    this.state.hotbar = this.inv.hot;
+    this.state.counts = this.inv.hotN;
+    this.state.sel = this.inv.sel;
+    this.hud.buildHotbar(this.inv.hot, this.inv.sel, this.hud.onHotbarChange, this.inv.creative ? null : this.inv.hotN);
+    this.hud.selectSlot(this.inv.sel);
+    this.viewModel.setBlock(this.inv.hot[this.inv.sel]);
+    if (this.inventoryOpen) this.refreshInventoryUI();
+  }
+
+  /** Режим мира + содержимое инвентаря (из сохранения или по умолчанию). */
+  /** Сменить режим, не теряя мир: творчество добирает хотбар, выживание — нет. */
+  setCreative(on) {
+    this.inv.creative = !!on;
+    this.state.creative = !!on;
+    if (on) {
+      for (let i = 0; i < 9; i++) this.inv.hotN[i] = 0;
+      if (!this.inv.hot.some((id) => id)) HOTBAR_DEFAULT.forEach((k, i) => { this.inv.hot[i] = byKey(k); });
+    } else {
+      // выдадим выживальщику ровно то, что он заработал; пусто — значит пусто
+    }
+    this.syncHotbar();
+  }
+
+  setupInventory(creativeSaved, invData) {
+    const creative = typeof creativeSaved === 'boolean' ? creativeSaved : !!this.settings.creative;
+    this.inv.creative = creative;
+    this.inv.hot.fill(0); this.inv.hotN.fill(0);
+    this.inv.main.fill(0); this.inv.mainN.fill(0);
+    if (invData && Array.isArray(invData.hot)) {
+      this.inv.load(typeof invData.hot === 'object' && !Array.isArray(invData.hot) ? invData : { hot: invData, hotN: [], main: [], mainN: [], creative });
+    } else if (creative) {
+      HOTBAR_DEFAULT.forEach((k, i) => { this.inv.hot[i] = byKey(k); });
+    } else if (invData == null) {
+      // выживание: как в оригинале — руки пусты, всё добывается и крафтится
+    }
+    this.inv.sel = Math.max(0, Math.min(8, this.inv.sel));
+    this.state.creative = creative;
+  }
+
+  /** Выдать предмет (сбор, крафт, дроп). */
+  pickup(id, n = 1) {
+    if (!id) return;
+    const left = this.inv.add(id, n);
+    if (left > 0) { this.hud.toast('Инвентарь полон', 'warn'); return; }
+    this.syncHotbar();
+    this.scheduleSave();
+  }
+
+  /** Верстак в радиусе 4 блоков — открывает рецепты посложнее. */
+  nearCraftingTable() {
+    const world = this.state.world;
+    if (!world) return false;
+    const p = this.player;
+    const tableId = byKey('crafting_table');
+    const x0 = Math.floor(p.x) - 4, x1 = Math.floor(p.x) + 4;
+    const y0 = Math.floor(p.y) - 2, y1 = Math.floor(p.y) + 3;
+    const z0 = Math.floor(p.z) - 4, z1 = Math.floor(p.z) + 4;
+    for (let y = y0; y <= y1; y++) {
+      for (let z = z0; z <= z1; z++) {
+        for (let x = x0; x <= x1; x++) if (world.getBlock(x, y, z) === tableId) return true;
+      }
+    }
+    return false;
+  }
+
+  // ------------------------------------------------------------ инвентарь UI
+  refreshInventoryUI() {
+    const near = this.nearCraftingTable();
+    const snap = this.inv.snapshot();
+    const recipes = RECIPES_CLEAN.map((r) => ({
+      name: r.name,
+      outId: r.outId,
+      n: r.n,
+      table: r.table,
+      ok: canCraft(r, this.inv, near),
+      need: r.need.map((x) => ({ id: x.id, n: x.n, have: Math.min(this.inv.count(x.id), 999) })),
+    }));
+    this.hud.renderInventory({
+      snap,
+      recipes,
+      nearTable: near,
+      creative: this.inv.creative,
+      icon: (id, size) => this.atlas.icon(id, size),
+      names: (id) => BLOCKS[id]?.name ?? '—',
+      onSlot: (kind, i) => this.inventorySlotClick(kind, i),
+      onPick: (id) => this.inventoryPick(id),
+      onCraft: (idx) => this.doCraft(idx),
+      onClose: () => this.closeInventory(),
+    });
+  }
+
+  inventorySlotClick(kind, i) {
+    const inv = this.inv;
+    if (inv.cursor) {
+      const cur = inv.id(kind, i);
+      if (cur === inv.cursor) {
+        const space = inv.creative ? STACK : STACK - inv.n(kind, i);
+        const put = Math.min(space, inv.cursorN);
+        inv.set(kind, i, cur, inv.creative ? 0 : inv.n(kind, i) + put);
+        if (!inv.creative) inv.cursorN -= put;
+        if (inv.cursorN <= 0 || inv.creative) { inv.cursor = 0; inv.cursorN = 0; }
+      } else {
+        const tId = cur, tN = inv.n(kind, i);
+        inv.set(kind, i, inv.cursor, inv.creative ? 0 : inv.cursorN);
+        inv.cursor = tId;
+        inv.cursorN = inv.creative ? 1 : tN;
+        if (inv.creative) { inv.cursor = 0; inv.cursorN = 0; }
+      }
+    } else {
+      const id = inv.id(kind, i);
+      if (!id) return;
+      if (inv.creative) { this.inventoryPick(id); return; }
+      inv.cursor = id;
+      inv.cursorN = inv.n(kind, i);
+      inv.set(kind, i, 0, 0);
+    }
+    this.syncHotbar();
+    this.audio.ui('click');
+  }
+
+  inventoryPick(id) {
+    const slot = this.invTarget ?? this.inv.sel;
+    this.inv.set('hot', slot, id, this.inv.creative ? 0 : STACK);
+    this.invTarget = slot;
+    this.syncHotbar();
+    this.hud.showBlockName(id);
+    this.audio.ui('click');
+    this.scheduleSave();
+  }
+
+  doCraft(idx) {
+    const r = RECIPES_CLEAN[idx];
+    if (!r) return;
+    const near = this.nearCraftingTable();
+    if (!canCraft(r, this.inv, near)) {
+      this.audio.deny();
+      this.hud.toast(r.table && !near ? 'Нужен верстак рядом (поставь и подойди)' : 'Не хватает материалов', 'warn');
+      return;
+    }
+    if (craft(r, this.inv)) {
+      this.audio.place('wood');
+      this.hud.toast(`Скрафчено: ${BLOCKS[r.outId].name}`, '');
+      this.syncHotbar();
+      this.scheduleSave();
+    }
   }
 
   toggleInventory() {
     if (this.inventoryOpen) { this.closeInventory(); return; }
     this.inventoryOpen = true;
-    this.invTarget = this.state.sel;
+    this.invTarget = this.inv.sel;
     this.hud.show('inventory');
     this.hud.el.hud.dataset.keep = '1';
     this.hud.el.hud.classList.remove('hidden');
+    this.keys.clear();
+    this.input.mine = 0; this.input.place = 0;
     document.exitPointerLock?.();
     this.audio.openInv();
+    this.refreshInventoryUI();
   }
 
   closeInventory() {
+    if (!this.inventoryOpen) return;
     this.inventoryOpen = false;
+    const inv = this.inv;
+    if (inv.cursor) {
+      // недоставленный стек возвращается в инвентарь, а не исчезает
+      if (!inv.creative) inv.add(inv.cursor, inv.cursorN);
+      inv.cursor = 0; inv.cursorN = 0;
+    }
+    this.invTarget = null;
     this.hud.el.hud.dataset.keep = '0';
     this.hud.show(null);
+    this.syncHotbar();
     this.lockPointer();
-  }
-
-  fullscreen() {
-    if (document.fullscreenElement) document.exitFullscreen?.();
-    else document.documentElement.requestFullscreen?.();
+    this.audio.ui('click');
   }
 
   pause() {
@@ -465,6 +630,7 @@ export class Game {
 
   toMenu() {
     this.input.mine = 0; this.input.place = 0; this.keys.clear();
+    this.mobs.clear();
     this.state.running = false;
     this.state.paused = false;
     this.inventoryOpen = false;
@@ -539,7 +705,7 @@ export class Game {
     const hit = this.state.lastHit;
     if (!hit) return;
     const id = hit.id;
-    this.state.hotbar[this.state.sel] = id;
+    this.inv.set('hot', this.inv.sel, id, this.inv.creative ? 0 : Math.max(1, this.inv.n('hot', this.inv.sel)));
     this.hud.buildHotbar(this.state.hotbar, this.state.sel, this.hud.onHotbarChange);
     this.hud.selectSlot(this.state.sel);
     this.viewModel.setBlock(id);
@@ -551,8 +717,10 @@ export class Game {
     const hit = this.state.lastHit;
     const st = this.state;
     if (!hit) return;
-    const id = st.hotbar[st.sel];
-    if (!id) return;
+    const id = this.inv.hot[this.inv.sel];
+    if (!id) { this.audio.deny(); this.hud.toast('Пустой слот — E открывает инвентарь', 'warn'); return; }
+    if (isItem(id)) { this.audio.deny(); this.hud.toast(`${BLOCKS[id].name} — предмет, его не поставить`, 'warn'); return; }
+    if (!this.inv.creative && this.inv.hotN[this.inv.sel] <= 0) { this.audio.deny(); this.hud.toast('Блоки кончились', 'warn'); return; }
     const world = st.world;
     let tx = hit.x + hit.nx;
     let ty = hit.y + hit.ny;
@@ -569,6 +737,7 @@ export class Game {
       return;
     }
     if (!world.setBlock(tx, ty, tz, id)) return;
+    if (!this.inv.creative) { this.inv.consumeSelected(1); this.syncHotbar(); }
     this.audio.place(BLOCKS[id].sound);
     this.viewModel.triggerSwing();
     const tint = this.blockTint.get(id) ?? [0.8, 0.8, 0.8];
@@ -580,6 +749,10 @@ export class Game {
     const st = this.state;
     const world = st.world;
     const hit = st.lastHit;
+    if (st.mobTarget) {
+      if (st.breakProgress > 0) { st.breakProgress = 0; this.target.setBreakProgress(0); }
+      return;
+    }
     if (!this.input.mine || !hit) {
       if (st.breakProgress > 0) { st.breakProgress = 0; this.target.setBreakProgress(0); }
       this.hud.setMining(false);
@@ -598,7 +771,8 @@ export class Game {
       this.target.setBreakProgress(0);
       return;
     }
-    const total = Math.max(0.08, def.hardness);
+    const toolId = this.inv.hot[this.inv.sel];
+    const total = Math.max(0.08, def.hardness / Math.max(0.34, mineMultiplier(def, toolId)));
     const speed = this.player.flying ? 2.6 : 1;
     st.breakProgress += (dt / total) * speed;
     this.hud.setMining(true);
@@ -615,6 +789,7 @@ export class Game {
       this.target.setBreakProgress(0);
       this.hud.setMining(false);
       world.setBlock(hit.x, hit.y, hit.z, AIR);
+      if (!this.inv.creative) this.pickup(dropOf(hit.id), 1);
       this.audio.breakBlock(def.sound);
       const tint = this.blockTint.get(hit.id) ?? [0.7, 0.7, 0.7];
       this.particles.burst(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 14, tint, { speed: 3.4, life: 0.8, spread: 0.8 });
@@ -635,7 +810,9 @@ export class Game {
       spawn: [this.player.x, this.player.y, this.player.z],
       yaw: this.player.yaw, pitch: this.player.pitch,
       time: this.state.time,
-      hotbar: this.state.hotbar,
+      hotbar: this.inv.hot.slice(),
+      inv: this.inv.serialize(),
+      creative: this.inv.creative,
       hp: this.state.hp,
       edits: world.serializeEdits(),
     };
@@ -747,6 +924,7 @@ export class Game {
     if (!st.lastHit) this.target.setBreakProgress(0);
 
     // действия
+    this.attackTick(dt);
     this.mineTick(dt);
     st.placeCd -= dt;
     if (input.place && st.placeCd <= 0) { this.tryPlace(); st.placeCd = 0.2; }
@@ -761,11 +939,26 @@ export class Game {
     const sky = this.sky.update(st.time, this.settings.clouds, cam.position, this.materials.uniforms);
     this.viewModel.dayLight = sky.day;
     this.target.setDayLight(sky.day);
+    // мобы
+    const mv = this.mobs;
+    mv.day = sky.day;
+    mv.cap = this.settings.mobs | 0;
+    mv.enabled = mv.cap > 0 && !st.paused;
+    if (mv.enabled) mv.update(dt, this.player);
+    else if (mv.count) mv.clear();
     const u = this.materials.uniforms;
     u.uTime.value += dt;
     const far = this.settings.renderDistance * CHUNK;
     const under = this.player.headInWater;
-    u.uFogDensity.value = under ? 0.16 : 1.55 / Math.max(24, far * 1.05);
+    if (under) {
+      u.uFogDensity.value = 0.16;
+      u.uFogStart.value = 0.5;
+      u.uFogEnd.value = 15;
+    } else {
+      u.uFogDensity.value = 0.0007;                       // лёгкая дымка на горизонте
+      u.uFogStart.value = far * 0.55;                     // чётко до этой дистанции
+      u.uFogEnd.value = far * 1.02;                       // к краю прокрутки — полностью в дымке
+    }
     if (under) {
       u.uFogColor.value.setRGB(0.09 * (0.35 + sky.day), 0.26 * (0.35 + sky.day), 0.42 * (0.35 + sky.day));
     }
@@ -781,6 +974,38 @@ export class Game {
     }
     this.dbgT = (this.dbgT ?? 0) - dt;
     if (this.dbgT <= 0) { this.dbgT = 0.25; this.updateDebug(sky); }
+    if (st.hp <= 0) this.respawn();
+  }
+
+  /** Клик по мобу в прицеле: урон инструментом в руке. */
+  attackTick(dt) {
+    this.attackCd -= dt;
+    const st = this.state;
+    const cam = this.camera;
+    const dir = this.player.forward({});
+    const mob = this.mobs.pick(cam.position.x, cam.position.y, cam.position.z, dir.x, dir.y, dir.z, 4.4);
+    st.mobTarget = mob;
+    if (mob) this.target.hide();
+    if (!mob || !this.input.mine || this.attackCd > 0 || st.paused || this.inventoryOpen) return;
+    this.attackCd = 0.42;
+    const dmg = damageOf(this.inv.hot[this.inv.sel]);
+    this.mobs.hurt(mob, dmg, this.player.x, this.player.z, mob.def.hostile ? 4.2 : 6.4);
+    this.viewModel.triggerSwing();
+  }
+
+  /** Моб ударил игрока. В творческом режиме — не больно. */
+  hitByMob(dmg, mob) {
+    const st = this.state;
+    if (this.inv.creative || st.hp <= 0 || !st.running || st.paused) return;
+    st.hp = Math.max(0, st.hp - dmg);
+    this.hud.setHealth(st.hp);
+    this.hud.hurt();
+    this.audio.land(1.3);
+    const dx = this.player.x - mob.x, dz = this.player.z - mob.z;
+    const len = Math.hypot(dx, dz) || 1;
+    this.player.vx += (dx / len) * 4.4;
+    this.player.vz += (dz / len) * 4.4;
+    this.player.vy = Math.max(this.player.vy, 4.6);
     if (st.hp <= 0) this.respawn();
   }
 
@@ -807,7 +1032,8 @@ export class Game {
       `XYZ ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}  чанк ${cx},${cz}  блок ${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`,
       `биом: ${biome}  ·  время ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}  ·  свет ${(sky.day * 15) | 0}/15`,
       `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount}`,
-      `режим: ${p.flying ? 'полёт' : p.sprinting ? 'бег' : 'ходок'} · HP ${this.state.hp / 2} · сид ${this.state.seed}`,
+      `режим: ${p.flying ? 'полёт' : p.sprinting ? 'бег' : 'ходок'} · HP ${this.state.hp / 2} · ${this.inv.creative ? 'творчество' : 'выживание'} · сид ${this.state.seed}`,
+      `мобов вокруг: ${this.mobs.count} (видно ${this.mobs.nearCount(p, 48)}) · убито: ${this.mobs.kills} · в руке: ${BLOCKS[this.inv.hot[this.inv.sel]]?.name ?? '—'} ×${this.inv.creative ? '∞' : this.inv.hotN[this.inv.sel]}`,
       `${p.headInWater ? 'под водой' : p.inWater ? 'в воде' : 'на суше'}${p.onGround ? ' · на земле' : ''} · E — инвентарь, F3 — вкл/выкл панели`,
     ].join('\n'));
     void clock;

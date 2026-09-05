@@ -27,6 +27,7 @@
           <button id="t-fly" class="tbtn">✈</button>
           <button id="t-mine" class="tbtn">⛏</button>
           <button id="t-place" class="tbtn">▣</button>
+          <button id="t-inv" class="tbtn">▦</button>
         </div>
       </div>
     </div>
@@ -90,11 +91,23 @@
 
     <div id="inventory" class="screen hidden">
       <div class="panel box wide">
-        <h2>Инвентарь <span class="muted small">клик — поставить блок в выбранный слот · E / Esc — закрыть</span></h2>
-        <div id="inv-grid" class="inv-grid"></div>
-        <div class="row inv-slots">
-          <div class="muted small">Слот для назначения:</div>
-          <div id="inv-hotbar" class="hotbar compact"></div>
+        <h2>Инвентарь <span class="muted small" id="inv-hint">клик по клетке — взять, клик по другой — положить · E / Esc — закрыть</span></h2>
+        <div class="inv-cols">
+          <div class="inv-left">
+            <div class="muted small">Рюкзак</div>
+            <div id="inv-grid" class="inv-grid slots27"></div>
+            <div class="row inv-slots">
+              <div class="muted small">Хотбар</div>
+              <div id="inv-hotbar" class="hotbar compact"></div>
+            </div>
+            <div id="inv-cursor" class="muted small cursor-line"></div>
+          </div>
+          <div class="inv-right">
+            <div class="muted small" id="inv-craft-title">Крафт</div>
+            <div id="inv-craft" class="craft-list"></div>
+            <div class="muted small" id="inv-palette-title">Палитра (творчество)</div>
+            <div id="inv-palette" class="inv-grid palette"></div>
+          </div>
         </div>
       </div>
     </div>

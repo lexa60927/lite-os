@@ -2,11 +2,13 @@
  * Меширование чанка: отсечение скрытых граней, AO по углам, запечённый свет.
  * Только данные (типизированные массивы) — без three.js.
  *
- * Атрибуты вершины: position(3, локально в чанке), uv(2), light(4) = [окклюзия, небо, блок, волна].
+ * Атрибуты вершины: position(3, локально в чанке), uv(2), light(4) = [окклюзия, небо, блок, волна],
+ * tint(3) — оттенок биома (трава/листва/вода), по умолчанию белый.
  */
 import { CHUNK, HEIGHT, idx } from './constants.js';
 import { BLOCKS } from './blocks.js';
-import { OPAQUE, RENDER, HIDE_SAME, CUTOUT, FULL_BRIGHT, LIGHT, INSET, R_CUBE, R_LIQUID, R_CROSS, R_TORCH } from './props.js';
+import { OPAQUE, RENDER, HIDE_SAME, CUTOUT, FULL_BRIGHT, LIGHT, INSET, TINTED, WATER_TINT, R_CUBE, R_LIQUID, R_CROSS, R_TORCH } from './props.js';
+import { BIOME_TINT, BIOME_WATER_TINT } from './gen.js';
 
 export const F_TOP = 0, F_BOTTOM = 1;
 
@@ -32,9 +34,14 @@ export class QuadBuffer {
     this.pos = new Float32Array(quads * 12);
     this.uv = new Float32Array(quads * 8);
     this.light = new Float32Array(quads * 16);
+    this.tint = new Float32Array(quads * 12);
     this.index = new Uint32Array(quads * 6);
+    this.tr = 1; this.tg = 1; this.tb = 1;
     this.q = 0;
   }
+
+  /** Оттенок для всех вершин следующих граней (белый = без подкраски). */
+  setTint(r, g, b) { this.tr = r; this.tg = g; this.tb = b; }
 
   ensure() {
     if (this.q < this.cap) return;
@@ -43,12 +50,14 @@ export class QuadBuffer {
     this.pos = grow(this.pos, 12);
     this.uv = grow(this.uv, 8);
     this.light = grow(this.light, 16);
+    this.tint = grow(this.tint, 12);
     this.index = grow(this.index, 6);
   }
 
   push(verts, uvs, lights, flip) {
     this.ensure();
     const b = this.q * 12;
+    const tb = this.q * 12;
     const lb = this.q * 16;
     const ub = this.q * 8;
     const ib = this.q * 6;
@@ -64,6 +73,8 @@ export class QuadBuffer {
       this.light[li + 1] = l[1];
       this.light[li + 2] = l[2];
       this.light[li + 3] = l[3] || 0;
+      const ti = tb + i * 3;
+      this.tint[ti] = this.tr; this.tint[ti + 1] = this.tg; this.tint[ti + 2] = this.tb;
       this.uv[ub + i * 2] = uvs[i][0];
       this.uv[ub + i * 2 + 1] = uvs[i][1];
     }
@@ -85,6 +96,7 @@ export class QuadBuffer {
       position: this.pos.subarray(0, this.q * 12),
       uv: this.uv.subarray(0, this.q * 8),
       light: this.light.subarray(0, this.q * 16),
+      tint: this.tint.subarray(0, this.q * 12),
       index: this.index.subarray(0, this.q * 6),
       quads: this.q,
       vertices: this.q * 4,
@@ -123,6 +135,7 @@ export function buildChunkMesh(world, chunk, atlas) {
   const cx = chunk.cx;
   const cz = chunk.cz;
   const self = chunk.blocks;
+  const biomes = chunk.biomes;
   const cache = new NeighborCache(world, cx, cz);
   const CH = CHUNK;
 
@@ -184,6 +197,15 @@ export function buildChunkMesh(world, chunk, atlas) {
         if (id === 0) continue;
         const render = RENDER[id];
         const def = BLOCKS[id];
+        // подкраска биома: трава/листва/растения и вода
+        let tr = 1, tg = 1, tb = 1;
+        if (TINTED[id] || WATER_TINT[id]) {
+          const bio = biomes ? biomes[lz * CH + lx] : 2;
+          const c = (WATER_TINT[id] ? BIOME_WATER_TINT : BIOME_TINT)[bio] ?? BIOME_TINT[2];
+          tr = c[0]; tg = c[1]; tb = c[2];
+        }
+        solid.setTint(tr, tg, tb);
+        water.setTint(tr, tg, tb);
 
         if (render === R_CROSS || render === R_TORCH) {
           const rect = tileRect(atlas.index[def.tiles.all], atlas.cell, atlas.tile, atlas.grid);

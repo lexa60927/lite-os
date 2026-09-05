@@ -6,6 +6,11 @@ import { Noise, hash2, hash3i } from './noise.js';
 import { CHUNK, HEIGHT, SEA, SNOW_LINE, idx } from './constants.js';
 import { byKey } from './blocks.js';
 
+/** Границы высот: подобраны под фактическую гистограмму рельефа (~6% гор, ~8% океана). */
+const MOUNTAIN_LINE = 56;
+const SNOW_CAP = 70;
+const TREE_LINE = 61;        // выше уже голые камни, как в Minecraft
+
 const B = {
   stone: byKey('stone'), dirt: byKey('dirt'), grass: byKey('grass'), sand: byKey('sand'),
   sandstone: byKey('sandstone'), gravel: byKey('gravel'), bedrock: byKey('bedrock'),
@@ -16,12 +21,34 @@ const B = {
   flower_yellow: byKey('flower_yellow'),
 };
 
-export const BIOME = { OCEAN: 0, BEACH: 1, PLAINS: 2, FOREST: 3, DESERT: 4, SNOWY: 5, MOUNTAIN: 6 };
+export const BIOME = { OCEAN: 0, BEACH: 1, PLAINS: 2, FOREST: 3, DESERT: 4, SNOWY: 5, MOUNTAIN: 6, SAVANNA: 7, SWAMP: 8, TAIGA: 9 };
 export const DEFAULT_SEED = 42;
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
-export const BIOME_NAMES = ['Океан', 'Пляж', 'Равнины', 'Лес', 'Пустыня', 'Снега', 'Горы'];
+/** Вода: [r,g,b] — близкие к белому, чтобы не ломать привычный цвет моря. */
+export const BIOME_WATER_TINT = [
+  [0.62, 0.78, 1.0], [0.72, 0.86, 1.0], [0.80, 0.90, 1.0], [0.76, 0.90, 1.0],
+  [0.95, 0.92, 0.82], [0.86, 0.94, 1.0], [0.88, 0.94, 1.0], [0.86, 0.92, 0.96],
+  [0.52, 0.72, 0.56], [0.78, 0.90, 0.98],
+];
+
+export const BIOME_NAMES = ['Океан', 'Пляж', 'Равнины', 'Лес', 'Пустыня', 'Снега', 'Горы', 'Саванна', 'Болото', 'Тайга'];
+
+/** Оттенок травы/листвы (умножается на тайл через вершинный tint). */
+export const BIOME_TINT = [
+  [0.62, 0.84, 0.44],  // океан
+  [0.74, 0.86, 0.56],  // пляж
+  [0.62, 0.84, 0.44],  // равнины
+  [0.45, 0.76, 0.32],  // лес
+  [0.90, 0.86, 0.56],  // пустыня
+  [0.76, 0.88, 0.82],  // снега
+  [0.70, 0.80, 0.64],  // горы
+  [0.84, 0.82, 0.44],  // саванна
+  [0.50, 0.64, 0.30],  // болото
+  [0.52, 0.78, 0.42],  // тайга
+];
+
 
 export class Terrain {
   constructor(seed = 1) {
@@ -43,14 +70,17 @@ export class Terrain {
 
   /** Высота рельефа (0..HEIGHT). */
   rawHeight(x, z) {
-    const cont = this.h.fbm2(x / 340, z / 340, 4) * 0.5 + 0.5;      // материки и океаны
-    const hills = this.h.fbm2(x / 82, z / 82, 4);                    // холмы
-    const ridged = this.h.ridged2(x / 240, z / 240, 4);              // горные хребты
-    const rough = this.h.fbm2(x / 22, z / 22, 2);                    // мелкий рельеф
-    const mask = Math.max(0, this.h.fbm2(x / 520 + 220, z / 520 - 120, 2));
-    const mountains = Math.pow(ridged, 2.1) * (10 + mask * 54);
-    let y = 23 + cont * 19 + hills * 8 + mountains + rough * 1.6;
-    if (cont < 0.40) y -= (0.4 - cont) * 46;   // океанические впадины
+    // Крупные формы (материки, холмы, хребты) + минимум мелкого шума: тогда
+    // рельеф читается как большой мир, а не как «ступеньки» в каждый блок.
+    const cont = this.h.fbm2(x / 420, z / 420, 4) * 0.5 + 0.5;      // материки и океаны
+    const hills = this.h.fbm2(x / 118, z / 118, 3);                 // холмы
+    const ridged = this.h.ridged2(x / 260, z / 260, 3);             // горные хребты
+    const rough = this.h.fbm2(x / 46, z / 46, 1);                   // мягкая неровность
+    // широкие горные «провинции»: без них хребты получались одинокими иглами
+    const mask = Math.max(0, this.h.fbm2(x / 700 + 220, z / 700 - 120, 2) * 1.5);
+    const mountains = Math.pow(ridged, 1.9) * (8 + mask * 78);
+    let y = 24 + cont * 21 + hills * 10.5 + mountains + rough * 1.3;
+    if (cont < 0.5) y -= (0.5 - cont) * 58;      // океанические впадины
     return Math.max(3, Math.min(HEIGHT - 8, Math.round(y)));
   }
 
@@ -63,11 +93,14 @@ export class Terrain {
     const [temp, humid] = this.climate(x, z);
     let biome;
     if (h < SEA - 2) biome = BIOME.OCEAN;
+    else if (h >= MOUNTAIN_LINE) biome = BIOME.MOUNTAIN;
     else if (h <= SEA + 1) biome = BIOME.BEACH;
-    else if (h >= SNOW_LINE + 6) biome = BIOME.MOUNTAIN;
-    else if (temp > 0.6 && humid < 0.45) biome = BIOME.DESERT;
-    else if (temp < 0.33) biome = BIOME.SNOWY;
+    else if (temp > 0.55 && humid < 0.46) biome = BIOME.DESERT;
+    else if (temp < 0.36) biome = BIOME.SNOWY;
+    else if (h <= SEA + 7 && humid > 0.6) biome = BIOME.SWAMP;
     else if (humid > 0.55) biome = BIOME.FOREST;
+    else if (temp > 0.5 && humid > 0.4) biome = BIOME.SAVANNA;
+    else if (temp < 0.46 && humid > 0.44) biome = BIOME.TAIGA;
     else biome = BIOME.PLAINS;
     c = { h, temp, humid, biome };
     this.cache.set(key, c);
@@ -113,9 +146,13 @@ export class Terrain {
     const r = hash2(x, z, this.seed ^ 0x5bd1e995);
     const c = this.col(x, z);
     const biome = c.biome;
+    if (c.h > TREE_LINE) return null;          // на вершинах деревья не растут
     const density =
       biome === BIOME.FOREST ? 0.055 :
+      biome === BIOME.TAIGA ? 0.042 :
       biome === BIOME.PLAINS ? 0.008 :
+      biome === BIOME.SAVANNA ? 0.006 :
+      biome === BIOME.SWAMP ? 0.03 :
       biome === BIOME.SNOWY ? 0.02 :
       biome === BIOME.MOUNTAIN ? 0.004 : 0;
     if (biome === BIOME.DESERT) {
@@ -134,7 +171,7 @@ export class Terrain {
       Math.abs(h - this.col(x, z + 1).h),
     );
     if (d > 4) return null;
-    const spruce = biome === BIOME.SNOWY || biome === BIOME.MOUNTAIN;
+    const spruce = biome === BIOME.SNOWY || biome === BIOME.MOUNTAIN || biome === BIOME.TAIGA || biome === BIOME.SWAMP;
     const trunk = spruce ? 6 + ((hash2(x, z, 11) * 5) | 0) : 4 + ((hash2(x, z, 13) * 3) | 0);
     return { kind: spruce ? 'spruce' : 'oak', trunk, h };
   }
@@ -193,6 +230,8 @@ export class Terrain {
     const { cx, cz } = chunk;
     const blocks = chunk.blocks;
     const heights = new Uint8Array(CHUNK * CHUNK);   // рельеф колонки (для декора)
+    if (!chunk.biomes || chunk.biomes.length !== CHUNK * CHUNK) chunk.biomes = new Uint8Array(CHUNK * CHUNK);
+    const biomes = chunk.biomes;
     blocks.fill(0);
     let solid = 0;
 
@@ -205,17 +244,20 @@ export class Terrain {
         const biome = c.biome;
         const temp = c.temp;
         heights[lz * CHUNK + lx] = h;
+        biomes[lz * CHUNK + lx] = biome;
 
         let oreCell = -1;
         let oreType = 0;
         const sandy = biome === BIOME.DESERT || biome === BIOME.BEACH;
-        const cold = biome === BIOME.SNOWY || (h >= SNOW_LINE + 6 && temp < 0.42);
+        const cold = biome === BIOME.SNOWY || biome === BIOME.TAIGA || (h >= SNOW_CAP && temp < 0.45);
+        const swamp = biome === BIOME.SWAMP;
 
         for (let y = 0; y <= h; y++) {
           let id;
           if (y === 0) id = B.bedrock;
           else if (y === h) {
             if (h <= SEA + 1) id = hash2(x, z, 91) > 0.86 ? B.gravel : B.sand;
+            else if (swamp) id = h <= SEA + 2 ? B.podzol : B.grass;
             else if (sandy) id = B.sand;
             else if (cold) id = B.snow;
             else if (biome === BIOME.MOUNTAIN) id = B.stone;
@@ -235,8 +277,9 @@ export class Terrain {
           }
           if (id) { blocks[idx(lx, y, lz)] = id; solid++; }
         }
-        // вода выше рельефа
-        for (let y = h + 1; y <= SEA; y++) blocks[idx(lx, y, lz)] = B.water;
+        // вода выше рельефа (на болоте — на блок-два выше уровня моря)
+        const waterTop = swamp ? SEA + 1 : SEA;
+        for (let y = h + 1; y <= waterTop; y++) blocks[idx(lx, y, lz)] = B.water;
       }
     }
 
@@ -268,14 +311,16 @@ export class Terrain {
         const x = cx * CHUNK + lx;
         const z = cz * CHUNK + lz;
         const h = heights[lz * CHUNK + lx];
-        if (h <= SEA || h >= SNOW_LINE + 6) continue;
+        if (h <= SEA || h >= SNOW_CAP) continue;
         const i = idx(lx, h, lz);
         if (blocks[i] !== B.grass && blocks[i] !== B.podzol) continue;
         const r = hash2(x, z, this.seed ^ 0x27d4eb2f);
         const above = idx(lx, h + 1, lz);
         if (blocks[above] !== 0) continue;
-        const forest = this.col(x, z).biome === BIOME.FOREST;
-        if (r < (forest ? 0.22 : 0.13)) blocks[above] = B.tall_grass;
+        const bcol = this.col(x, z).biome;
+        const forest = bcol === BIOME.FOREST || bcol === BIOME.SWAMP;
+        const savanna = bcol === BIOME.SAVANNA;
+        if (r < (forest ? 0.22 : savanna ? 0.3 : 0.13)) blocks[above] = B.tall_grass;
         else if (r < (forest ? 0.28 : 0.16)) blocks[above] = B.fern;
         else if (r > 0.955) blocks[above] = B.flower_red;
         else if (r > 0.935) blocks[above] = B.flower_yellow;

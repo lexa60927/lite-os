@@ -57,6 +57,10 @@ export function installTouch(root, { input, api }) {
   root.querySelector('#t-fly')?.addEventListener('click', () => {
     api.toggleFly?.();
   });
+  root.querySelector('#t-inv')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    api.toggleInv?.();                 // мобильный инвентарь: без клавиатуры не подступиться
+  });
 
   // обзор: свайп по всему экрану, кроме джойстика/кнопок
   const look = { id: -1, x: 0, y: 0 };

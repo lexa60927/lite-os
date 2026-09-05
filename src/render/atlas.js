@@ -14,11 +14,12 @@ export class Atlas {
     const packed = packAtlas(tiles);
     const tex = new THREE.DataTexture(packed.data, packed.width, packed.height, THREE.RGBAFormat);
     tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestMipmapLinearFilter;
-    tex.generateMipmaps = true;
+    // Без mipmaps: у атласа соседние тайлы стоят вплотную, и на мип-уровнях 3+
+    // они усреднялись — по дальним чанкам шли зелёные/ржавые разводы.
+    tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.colorSpace = THREE.NoColorSpace;
-    tex.anisotropy = 4;
     tex.needsUpdate = true;
 
     this.texture = tex;
@@ -43,7 +44,7 @@ export class Atlas {
     ctx.imageSmoothingEnabled = false;
     const def = BLOCKS[id] ?? BLOCKS[AIR];
     if (def && def.tiles) {
-      const flat = def.render === 'cross' || def.render === 'torch';
+      const flat = def.render === 'cross' || def.render === 'torch' || def.render === 'item';
       const top = this.canvases[def.tiles.top ?? def.tiles.all];
       const side = this.canvases[def.tiles.side ?? def.tiles.all];
       if (flat || !top || !side) {

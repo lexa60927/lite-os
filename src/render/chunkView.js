@@ -13,16 +13,16 @@ export class ChunkView {
     this.materials = materials;
     this.atlas = atlas;
     this.objects = new Map();     // world key -> { solid, water }
-    this.renderDistance = 6;
-    this.genBudget = 6;           // мс на кадр
-    this.meshBudget = 6;
+    this.renderDistance = 10;
+    this.genBudget = 9;           // мс на кадр
+    this.meshBudget = 8;
     this._candidates = [];
     this.stats = { gen: 0, mesh: 0, quads: 0, pending: 0 };
   }
 
   static key(cx, cz) { return chunkKey(cx, cz); }
 
-  setRenderDistance(r) { this.renderDistance = Math.max(2, Math.min(12, r | 0)); }
+  setRenderDistance(r) { this.renderDistance = Math.max(2, Math.min(16, r | 0)); }
 
   /** Обновить потоковую загрузку; вызывать каждый кадр. */
   update(playerPos) {
@@ -128,6 +128,7 @@ export class ChunkView {
     geo.setAttribute('position', new THREE.BufferAttribute(data.position, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(data.uv, 2));
     geo.setAttribute('light', new THREE.BufferAttribute(data.light, 4));
+    geo.setAttribute('tint', new THREE.BufferAttribute(data.tint, 3));
     geo.setIndex(new THREE.BufferAttribute(data.index, 1));
     geo.computeBoundingSphere();
     geo.computeBoundingBox();

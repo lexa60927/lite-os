@@ -4,8 +4,10 @@ import { BLOCKS } from '../engine/blocks.js';
 const $ = (id) => document.getElementById(id);
 
 export const DEFAULT_SETTINGS = {
-  renderDistance: 6,
+  renderDistance: 10,
   fov: 74,
+  mobs: 14,
+  creative: false,
   sensitivity: 1,
   sfx: 0.55,
   music: 0.22,
@@ -23,7 +25,7 @@ export const DEFAULT_SETTINGS = {
 export const CONTROLS = [
   ['WASD / ←↑↓→', 'движение'],
   ['Мышь', 'осмотр'],
-  ['ЛКМ (держать)', 'копать блок'],
+  ['ЛКМ (держать)', 'копать блок · атака по мобу'],
   ['ПКМ', 'поставить блок'],
   ['СКМ', 'выбрать блок под курсором'],
   ['Пробел', 'прыжок · двойной — полёт'],
@@ -51,6 +53,8 @@ export class Hud {
       water: $('water-tint'), vignette: $('vignette'), hp: $('hp'), crosshair: $('crosshair'),
       seed: $('seed'), worlds: $('worlds'), touch: $('touch-ui'), invGrid: $('inv-grid'), invHotbar: $('inv-hotbar'),
       settingsBody: $('settings-body'), pauseStats: $('pause-stats'), controls: $('controls-list'),
+      invCursor: $('inv-cursor'), invCraft: $('inv-craft'), invCraftTitle: $('inv-craft-title'),
+      invPalette: $('inv-palette'), invPaletteTitle: $('inv-palette-title'), invHint: $('inv-hint'),
     };
     this.slots = [];
     this.settings = { ...DEFAULT_SETTINGS };
@@ -84,11 +88,12 @@ export class Hud {
   }
 
   // -------------------------------------------------------------- хотбар
-  buildHotbar(hotbar, selected, onChange) {
+  buildHotbar(hotbar, selected, onChange, counts = null) {
     this.hotbar = hotbar;
     this.sel = selected;
-    this.onHotbarChange = onChange;
-    const render = (into, compact) => {
+    this.hotCounts = counts;
+    this.onHotbarChange = onChange ?? this.onHotbarChange;
+    const render = (into, compact, kind) => {
       into.innerHTML = '';
       const refs = [];
       hotbar.forEach((id, i) => {
@@ -105,20 +110,110 @@ export class Hud {
           img.src = this.atlas.icon(id, 48);
           img.alt = BLOCKS[id].name;
           slot.appendChild(img);
+          const n = counts ? counts[i] | 0 : 0;
+          if (n > 1) {
+            const cnt = document.createElement('span');
+            cnt.className = 'cnt';
+            cnt.textContent = String(n);
+            slot.appendChild(cnt);
+          }
         }
         slot.title = id ? BLOCKS[id].name : 'пусто';
         slot.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.onHotbarChange?.(i, 'click');
+          if (kind === 'inv') this.onInvSlot?.('hot', i);
+          else this.onHotbarChange?.(i, 'click');
         });
         into.appendChild(slot);
         refs.push(slot);
       });
       return refs;
     };
-    this.slots = render(this.el.hotbar, false);
-    this.el.invHotbar.innerHTML = '';
-    this.invSlots = render(this.el.invHotbar, true);
+    this.slots = render(this.el.hotbar, false, 'hud');
+    if (this.el.invHotbar) this.invSlots = render(this.el.invHotbar, true, 'inv');
+  }
+
+  markInventorySelection(i) {
+    (this.invSlots ?? []).forEach((sl, n) => sl.classList.toggle('sel', n === i));
+    (this.slots ?? []).forEach((sl, n) => sl.classList.toggle('sel', n === i));
+  }
+
+  /** Полный экран инвентаря: рюкзак + хотбар + курсор + крафт + палитра. */
+  renderInventory(view) {
+    const { snap, recipes, creative, icon, names, onSlot, onPick, onCraft, nearTable } = view;
+    this.onInvSlot = onSlot;
+    const mk = (id, n, kind, index) => {
+      const slot = document.createElement('div');
+      slot.className = 'slot' + (kind === 'hot' && index === snap.sel ? ' sel' : '');
+      if (id) {
+        const img = document.createElement('img');
+        img.src = icon(id, 44);
+        img.alt = names(id);
+        slot.appendChild(img);
+        if (n > 1) {
+          const c = document.createElement('span');
+          c.className = 'cnt';
+          c.textContent = String(n);
+          slot.appendChild(c);
+        }
+      }
+      slot.title = id ? `${names(id)}${n ? ' ×' + n : ''}` : 'пусто';
+      slot.onclick = () => onSlot(kind, index);
+      return slot;
+    };
+    const grid = this.el.invGrid;
+    grid.innerHTML = '';
+    snap.main.forEach((it, i) => grid.appendChild(mk(it.id, it.n, 'main', i)));
+    this.buildHotbar(snap.hot.map((x) => x.id), snap.sel, this.onHotbarSelect, creative ? null : snap.hot.map((x) => x.n));
+    this.el.invCursor.textContent = snap.cursor.id
+      ? `В руке: ${names(snap.cursor.id)}${snap.cursor.n > 1 ? ' ×' + snap.cursor.n : ''} — кликни по клетке, чтобы положить`
+      : creative ? 'Творчество: клик по палитре кладёт блок в выбранный слот' : 'Клик по клетке — взять стек, по другой — положить/обменять';
+    const craft = this.el.invCraft;
+    craft.innerHTML = '';
+    if (this.el.invCraftTitle) {
+      this.el.invCraftTitle.textContent = nearTable ? 'Крафт · верстак рядом — доступны все рецепты' : 'Крафт · у верстака (в 4 блоках) открываются инструменты из камня и железа';
+    }
+    recipes.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'craft-row' + (r.ok ? ' ok' : ' locked');
+      const img = document.createElement('img');
+      img.src = icon(r.outId, 32);
+      row.appendChild(img);
+      const name = document.createElement('span');
+      name.className = 'cname';
+      name.textContent = `${names(r.outId)}${r.n > 1 ? ' ×' + r.n : ''}`;
+      row.appendChild(name);
+      const need = document.createElement('span');
+      need.className = 'cneed';
+      need.textContent = r.need.map((x) => `${names(x.id)} ${x.have}/${x.n}`).join(' · ') + (r.table ? ' · верстак' : '');
+      row.appendChild(need);
+      const btn = document.createElement('button');
+      btn.textContent = r.ok ? 'Скрафтить' : '—';
+      btn.disabled = !r.ok;
+      btn.onclick = () => onCraft(i);
+      row.appendChild(btn);
+      craft.appendChild(row);
+    });
+    const pal = this.el.invPalette;
+    const palTitle = this.el.invPaletteTitle;
+    if (pal) {
+      pal.innerHTML = '';
+      if (palTitle) palTitle.style.display = creative ? '' : 'none';
+      if (creative) {
+        for (const def of BLOCKS) {
+          if (!def.id || def.render === 'none') continue;
+          const slot = document.createElement('div');
+          slot.className = 'slot';
+          const img = document.createElement('img');
+          img.src = icon(def.id, 36);
+          img.alt = def.name;
+          slot.appendChild(img);
+          slot.title = def.name;
+          slot.onclick = () => onPick(def.id);
+          pal.appendChild(slot);
+        }
+      }
+    }
   }
 
   selectSlot(i) {
@@ -184,19 +279,21 @@ export class Hud {
   // ------------------------------------------------------ настройки
   settingsForm(settings, onChange, extra = {}) {
     const defs = [
-      { key: 'renderDistance', label: 'Дальность прорисовки', min: 2, max: 12, step: 1, fmt: (v) => `${v} чанк.` },
+      { key: 'renderDistance', label: 'Дальность прорисовки', min: 2, max: 16, step: 1, fmt: (v) => `${v} чанк · ~${v * 16} блоков` },
       { key: 'fov', label: 'Поле зрения', min: 55, max: 110, step: 1, fmt: (v) => `${v}°` },
       { key: 'sensitivity', label: 'Чувствительность мыши', min: 0.2, max: 3, step: 0.05, fmt: (v) => v.toFixed(2) },
       { key: 'sfx', label: 'Громкость эффектов', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
       { key: 'music', label: 'Громкость музыки', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
       { key: 'clouds', label: 'Облачность', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
       { key: 'dayLength', label: 'Длина суток, мин', min: 2, max: 40, step: 1, fmt: (v) => `${v}` },
+      { key: 'mobs', label: 'Мобов вокруг', min: 0, max: 32, step: 1, fmt: (v) => (v ? `${v}` : 'выкл') },
     ];
     const checks = [
       { key: 'ao', label: 'Мягкое затенение (AO)' },
       { key: 'smoothLight', label: 'Плавный свет' },
       { key: 'viewBob', label: 'Покачивание камеры' },
       { key: 'autoJump', label: 'Автопрыжок через уступы' },
+      { key: 'creative', label: 'Творчество: блоки не тратятся, урон не страшен' },
       { key: 'freeTime', label: 'Заморозить время' },
       { key: 'showDebug', label: 'Панель отладки (F3)' },
       { key: 'touch', label: 'Сенсорное управление' },

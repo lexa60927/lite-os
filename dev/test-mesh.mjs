@@ -55,3 +55,20 @@ const m2 = buildChunkMesh(w2, c2, atlas);
 const lp = m2.solid.light;
 const uniq = new Set(); for (let i=0;i<lp.length;i+=3) uniq.add(lp[i].toFixed(3));
 console.log('разных уровней окклюзии в яме:', uniq.size, [...uniq].slice(0,8).join(' '));
+
+// --- атрибут tint (оттенок биома) обязан быть у каждой геометрии, иначе в шейдере будет чёрный ---
+function checkTint(buf, name) {
+  const q = buf.quads ?? 0;
+  if (!buf.tint) { console.log(`${name}: ✘ атрибута tint нет — чанк отрисуется чёрным`); return false; }
+  let bad = 0, ones = 0;
+  for (let i = 0; i < q * 4 * 3; i += 3) {
+    const v = [buf.tint[i], buf.tint[i + 1], buf.tint[i + 2]];
+    if (v.some((x) => !Number.isFinite(x) || x <= 0 || x > 2)) bad++;
+    if (v[0] === 1 && v[1] === 1 && v[2] === 1) ones++;
+  }
+  const ok = bad === 0 && q > 0;
+  console.log(`${name}: tint у ${q * 4 - ones} вершин отличается от белого, ошибок ${bad} ${ok ? '✔' : '✘'}`);
+  return ok;
+}
+const tintOk = checkTint(m.solid, 'TINT');
+if (!tintOk) process.exitCode = 1;
