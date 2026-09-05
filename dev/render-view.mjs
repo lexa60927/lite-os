@@ -168,7 +168,7 @@ for (let t = 0; t < tris; t++) {
       const tx0 = Math.min(AW - 1, Math.max(0, Math.floor(u * AW)));
       const ty0 = Math.min(AW - 1, Math.max(0, Math.floor(v * AW)));
       const si = (ty0 * AW + tx0) * 4;
-      if (A[si + 3] < 100) continue;
+      if (A[si + 3] < 38) continue;   // = alphaTest 0.15 у solid-материала (voxelMaterial.js); держать в такт
       zb[pxi] = z;
       const lit = Math.min(1.45, (0.14 + 0.92 * sun * sk) * oc + 0.85 * bl * (0.25 + 0.75 * oc));
       let cr = (A[si] / 255) * tr * lit;

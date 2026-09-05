@@ -538,9 +538,11 @@ export class Terrain {
         // площади. Раньше в саванне травинка была на 30% клеток — луг читался
         // полем зелёных штырьков, и это выглядело как «сломанные текстуры».
         const cl = hash2(x >> 2, z >> 2, (this.seed + 0x5c31) >>> 0);
-        const patch = cl > 0.72 ? 0.2 : cl > 0.46 ? 0.55 : 1.2;
-        const tuft = (forest ? 0.12 : savanna ? 0.075 : 0.06) * patch;
-        const toFern = tuft + (forest ? 0.05 : 0.028) * patch;
+        // Пятна куртин: густые — редко, и максимум 1.0 (с 1.2 луг в саванне
+        // превращался в поле штырьков, а крестовина удваивает визуальную плотность).
+        const patch = cl > 0.72 ? 0.2 : cl > 0.46 ? 0.6 : 1;
+        const tuft = (forest ? 0.115 : savanna ? 0.062 : 0.085) * patch;
+        const toFern = tuft + (forest ? 0.05 : 0.026) * patch;
         if (r < tuft) blocks[above] = B.tall_grass;
         else if (r < toFern) blocks[above] = B.fern;
         else if (r > 0.968) blocks[above] = B.flower_red;

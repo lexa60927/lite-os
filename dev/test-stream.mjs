@@ -86,11 +86,45 @@ const ok = (m) => console.log('✔ ' + m);
   if (got < need) bad(`ближние чанки не залиты геометрией: ${got}/${need} за ${frames} кадров при бюджете ${view.streamBudget} мс — это и есть «прозрачные чанки»`);
   else ok(`радиус ${RING} замешен за ${frames} кадров (было в очереди ${queued}), бюджет ${view.streamBudget} мс`);
 
-  if (world.dirtyMesh.size > queued) bad(`очередь меша растёт вместо того, чтобы разгребаться: ${world.dirtyMesh.size}`);
-  else ok(`очередь меша разгребается: ${queued} → ${world.dirtyMesh.size}`);
+  // Ключевая проверка: очередь обязана РАССОСАТЬСЯ, а не «уменьшиться». Если она
+  // стоит на месте при пустом world.dirtyMesh — значит чанки выбрасываются из
+  // очереди как «неготовые» и обратно не возвращаются: 351 чанк, 88 мешей.
+  let drained = 0;
+  while (drained < 900) { view.update(pos); if (!world.dirtyMesh.size) break; drained++; }
+  let withGeo = 0, total = 0;
+  for (let dz = -6; dz <= 6; dz++) for (let dx = -6; dx <= 6; dx++) {
+    const c = world.getChunk(dx, dz);
+    if (!c || !c.generated) continue;
+    total++;
+    const o = view.objects.get(ChunkView.key(dx, dz));
+    if (o && (o.solid || o.water)) withGeo++;
+  }
+  if (world.dirtyMesh.size) bad(`очередь меша не разгреблась: ${world.dirtyMesh.size} чанков через ${drained} кадров`);
+  else ok(`очередь меша пуста через ${drained} кадров`);
+  if (withGeo < total) bad(`чанков сгенерировано ${total}, а геометрия у ${withGeo} — невидимых ${total - withGeo}`);
+  else ok(`все ${total} чанков радиуса имеют геометрию`);
   const d = view.streamDebug();
   if (d.genErr || d.meshErr) bad(`сбои в конвейере: ген ${d.genErr}, меш ${d.meshErr}`);
   else ok('ни одной ошибки генерации/меширования');
+}
+
+// ── 2.5. getChunk не имеет права врать про уже существующий чанк ────────────
+// Одно-слотовый кэш World + отсутствующий чанк = отравленный null. Мешеер лезет
+// NeighborCache'ом в соседей, трогает getChunk, кэш запоминает «нет»; чанк
+// генерируется, а getChunk продолжает отвечать «нет» — neighborsReady врёт, чанк
+// летит из очереди меша, и мир остаётся с генерацией без геометрии.
+{
+  const world = new World(31337);
+  if (world.getChunk(4, 4)) bad('чанк появился до генерации');
+  world.ensureChunk(4, 4);
+  if (!world.getChunk(4, 4)) bad('getChunk отдал отравленный null после ensureChunk — из-за этого чанки и остаются невидимыми');
+  else ok('getChunk видит чанк сразу после генерации (отрицательный ответ не кэшируется)');
+  // соседние запросы не должны сбрасывать кэш на чужой ключ
+  world.ensureChunk(5, 4); world.ensureChunk(3, 4); world.ensureChunk(4, 5); world.ensureChunk(4, 3);
+  let ready = 0;
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (world.getChunk(4 + dx, 4 + dz)) ready++;
+  if (ready !== 4) bad(`соседи не видны: ${ready}/4`);
+  else ok('все 4 соседа видны — neighborsReady больше не блокирует меш');
 }
 
 // ── 3. чанк, где генерация упала, не обязан оставаться дырой навсегда ───────

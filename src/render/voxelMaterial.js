@@ -108,7 +108,11 @@ export function createVoxelMaterials(atlas) {
     uniforms: shared,
     // 0.4, а не 0.5: с mipmaps на дальних мип-уровнях листва усредняется до
     // alpha ~0.5, и при 0.5 кроны просто исчезали бы за горизонтом прорисовки.
-    solid: make({ wave: false, alpha: 1, alphaTest: 0.4, transparent: false }),
+    // 0.15: у вырезанных тайлов (трава, папоротник, листва) средний alpha на
+    // дальних mipmap-уровнях падает до 0.2–0.4, и с порогом 0.4 растения просто
+    // пропадали за полем зрения. Непрозрачные материалы порога не боятся: у них
+    // alpha = 255, а bleed-кромка в атласе дублирует край самого тайла.
+    solid: make({ wave: false, alpha: 1, alphaTest: 0.15, transparent: false }),
     water: make({ wave: true, alpha: 0.76, alphaTest: 0.02, transparent: true }),
   };
 }

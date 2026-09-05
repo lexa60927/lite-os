@@ -6,7 +6,7 @@ export const AIR = 0;
 
 /** Предметы-ингредиенты (id 38..42) и инструменты (id 43+). */
 const ITEM_DEFS = [
-  { id: 38, name: 'Саженец', key: 'sapling', tiles: { all: 'sapling' , tinted: true}, render: 'cross', cutout: true, breakable: true, hardness: 0.15, sound: 'grass', fullBright: true, plantH: 0.5 },
+  { id: 38, name: 'Саженец', key: 'sapling', tiles: { all: 'sapling' , tinted: true}, render: 'cross', cutout: true, breakable: true, hardness: 0.15, sound: 'grass', plantH: 0.4 },
   { id: 39, name: 'Кожа', key: 'leather', tiles: { all: 'item_leather' }, render: 'item', sound: 'soft' },
   { id: 40, name: 'Мясо', key: 'pork', tiles: { all: 'item_pork' }, render: 'item', sound: 'soft' },
   { id: 41, name: 'Палка', key: 'stick', tiles: { all: 'item_stick' }, render: 'item', sound: 'wood' },
@@ -28,7 +28,7 @@ const TOOL_TIERS = [
 ];
 const VILLAGE_DEFS = [
   { id: 59, name: 'Грядка', key: 'farmland', tiles: { top: 'farmland', bottom: 'dirt', side: 'dirt' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.4, sound: 'sand', drops: 'dirt' },
-  { id: 60, name: 'Пшеница', key: 'wheat', tiles: { all: 'wheat' }, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, fullBright: true, plantH: 0.72 },
+  { id: 60, name: 'Пшеница', key: 'wheat', tiles: { all: 'wheat' }, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, plantH: 0.62 },
   { id: 61, name: 'Стог сена', key: 'hay_block', tiles: { top: 'hay_top', bottom: 'hay_top', side: 'hay_side' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.5, sound: 'grass' },
   { id: 62, name: 'Изумруд', key: 'emerald', tiles: { all: 'item_emerald' }, render: 'item', sound: 'soft' },
 ];
@@ -90,10 +90,10 @@ export const BLOCKS = [
     solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'wood',
     light: 1.0, fullBright: true, noSelect: false, slim: true,
   },
-  { id: 25, name: 'Высокая трава', key: 'tall_grass', tiles: { all: 'tall_grass' , tinted: true}, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, fullBright: true, plantH: 0.55 },
-  { id: 26, name: 'Папоротник', key: 'fern', tiles: { all: 'fern' , tinted: true}, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, fullBright: true, plantH: 0.5 },
-  { id: 27, name: 'Красный цветок', key: 'flower_red', tiles: { all: 'flower_red' }, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, fullBright: true, plantH: 0.42 },
-  { id: 28, name: 'Жёлтый цветок', key: 'flower_yellow', tiles: { all: 'flower_yellow' }, render: 'cross', solid: false, opaque: false, cutable: true, cutout: true, replaceable: true, hardness: 0.05, sound: 'grass', fullBright: true, plantH: 0.42 },
+  { id: 25, name: 'Высокая трава', key: 'tall_grass', tiles: { all: 'tall_grass' , tinted: true}, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, plantH: 0.5 },
+  { id: 26, name: 'Папоротник', key: 'fern', tiles: { all: 'fern' , tinted: true}, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, plantH: 0.46 },
+  { id: 27, name: 'Красный цветок', key: 'flower_red', tiles: { all: 'flower_red' }, render: 'cross', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.05, sound: 'grass', replaceable: true, plantH: 0.38 },
+  { id: 28, name: 'Жёлтый цветок', key: 'flower_yellow', tiles: { all: 'flower_yellow' }, render: 'cross', solid: false, opaque: false, cutable: true, cutout: true, replaceable: true, hardness: 0.05, sound: 'grass', plantH: 0.38 },
   { id: 29, name: 'Кактус', key: 'cactus', tiles: { top: 'cactus_top', bottom: 'cactus_top', side: 'cactus_side' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.5, sound: 'grass', inset: 0.06 },
   { id: 30, name: 'Белая шерсть', key: 'wool_white', tiles: { all: 'wool_white' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.7, sound: 'wool' },
   { id: 31, name: 'Красная шерсть', key: 'wool_red', tiles: { all: 'wool_red' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 0.7, sound: 'wool' },

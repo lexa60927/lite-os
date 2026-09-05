@@ -45,6 +45,13 @@ export class World {
     const k = this.key(cx, cz);
     if (k === this._cacheKey) return this._cacheChunk;
     const c = this.chunks.get(k) ?? null;
+    // Отрицательный результат НЕ кэшируется. Одно-слотовый кэш + «чанка нет» =
+    // отравленный ответ: мешеер лезет по NeighborCache в отсутствующего соседа,
+    // кэш запоминает null, сосед тем временем генерируется, а getChunk всё ещё
+    // отвечает «нет» → neighborsReady врёт → чанок выбрасывается из очереди меша
+    // и никогда в неё не возвращается. Итог для игрока: мир сгенерирован
+    // (chunkCount растёт), а чанки невидимые, очередь при этом пустая.
+    if (!c) return null;
     this._cacheKey = k;
     this._cacheChunk = c;
     return c;
@@ -76,6 +83,7 @@ export class World {
     }
     this._genFail?.delete(k);
     this.chunks.set(k, c);
+    this._cacheKey = -1;          // кэш getChunk обязан забыть «чанка нет»
     c.generated = true;
     c.needsMesh = true;
     this.stats.generated++;
