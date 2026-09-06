@@ -461,7 +461,7 @@ export class Hud {
       { key: 'smoothLight', label: 'Плавный свет' },
       { key: 'viewBob', label: 'Покачивание камеры' },
       { key: 'autoJump', label: 'Автопрыжок через уступы' },
-      { key: 'creative', label: 'Творчество: блоки не тратятся, урон не страшен' },
+      { key: 'creative', label: 'Творчество: блоки не тратятся, урон не страшен, полёт доступен' },
       { key: 'freeTime', label: 'Заморозить время' },
       { key: 'showDebug', label: 'Панель отладки (F3)' },
       { key: 'touch', label: 'Сенсорное управление' },
