@@ -770,28 +770,37 @@ console.log(`✔ сид из строки → ${game.state.seed}, чанков $
   if (game.mods.setUniform('uK', 0.9) !== true) throw new Error('setUniform не применился');
   if (Math.abs(game.materials.uniforms.uK.value - 0.9) > 1e-6) throw new Error('ручка мода не дошла до материала');
 
-  // панель настроек обязана показать секцию и управления
+  // С v0.4.3 редактор своих модов в настройках ВЫКЛЮЧЕН (MODS_IN_GAME = false):
+  // ни поля, ни кнопок быть не должно — панель не должна предлагать то, что может
+  // погасить мир на кривом драйвере. Сам API жив: его видно ниже (register,
+  // applyModShaders, setUniform), и на нём держатся тесты и отладка из консоли.
   game.openSettings('pause');
   const walk = (el, acc = []) => { for (const c of (el && el.children) || []) { acc.push(c); walk(c, acc); } return acc; };
   const nodes = walk(document.getElementById('settings-body'));
   const texts = nodes.map((e) => e.textContent || '');
-  if (!nodes.some((e) => e.tagName === 'TEXTAREA')) throw new Error('в настройках нет поля для своего мода');
-  for (const need of ['Моды и свои шейдеры', 'Проба', 'Применить шейдеры сейчас', 'Сохранить мод', 'uK']) {
-    if (!texts.some((t) => t.includes(need))) throw new Error('в секции модов нет «' + need + '»');
+  if (nodes.some((e) => e.tagName === 'TEXTAREA')) throw new Error('редактор своих модов обязан быть выключен в настройках');
+  for (const gone of ['Моды и свои шейдеры', 'Применить шейдеры сейчас', 'Сохранить мод']) {
+    if (texts.some((t) => t.includes(gone))) throw new Error('в настройках осталась секция модов: «' + gone + '»');
   }
-  // чекбоксов в настройках много (ao, тени, …) — ищем именно строку нашего мода:
-  // div, у которого первый ребёнок — checkbox, а второй несёт имя мода
-  const row = nodes.find((e) => (e.children || []).length === 2
-    && e.children[0].tagName === 'INPUT' && e.children[0].type === 'checkbox'
-    && String(e.children[1].textContent || '').includes('Проба'));
-  const cb = row && row.children[0];
-  if (!cb) throw new Error('у мода нет чекбокса включения');
-  if (cb.checked !== true) throw new Error('включённый мод показан выключенным');
-  cb.checked = false;
-  if (typeof cb.onchange !== 'function') throw new Error('чекбокс мода без обработчика');
-  cb.onchange();
-  if (!JSON.parse(localStorage.getItem(M.MOD_KEY) || '{}').disabled?.includes('probe')) throw new Error('выключение мода не записалось в хранилище');
-  else setModEnabledClean();
+  const { MODS_IN_GAME } = await import('../src/main.js');
+  if (MODS_IN_GAME !== false) throw new Error('MODS_IN_GAME должен быть false — свои моды в игре выключены');
+
+  // запасная ступень: если GPU не собрал программу, игра обязана пересесть на
+  // лёгкий материал, а не оставить пустой экран
+  {
+    const before = game.materials.solid.fragmentShader;
+    if (game.degradeVoxelShader() !== true) throw new Error('degradeVoxelShader не сработал');
+    if (game.materials.solid === undefined || game.materials.solid.fragmentShader === before) throw new Error('материал не заменён на лёгкий');
+    if (!game.chunkView.objects.size || ![...game.chunkView.objects.values()].every((r) => !r.solid || r.solid.material === game.materials.solid)) throw new Error('меши чанков остались на мёртвом материале');
+    if (game._shaderTier !== 1) throw new Error('ступень не записана: ' + game._shaderTier);
+    if (game.degradeVoxelShader() !== true) throw new Error('вторая ступень (базовый материал) не сработала');
+    if (game._shaderTier !== 2 || !game.materials.solid.isMeshBasicMaterial) throw new Error('до базового материала не докатились');
+    // базовый ступень обязана принимать все удары игры: step() пишет в униформы каждый кадр
+    game.step(1 / 60);
+    game.render?.(1 / 60);
+    if (game.degradeVoxelShader() !== false) throw new Error('третьей ступени быть не должно — ниже базового материала падать некуда');
+    console.log('✔ ступени отрисовки: полный → лёгкий → базовый, меши переприсвоены, игра жива');
+  }
 
   // чужие сохранения: мода с блоками применяются только перезагрузкой — панель обязана это сказать
   const withBlocks = M.register('withb', { id: 'withb', name: 'С блоком', blocks: [{ key: 'probe_block', name: 'Пробный блок', tile: 'stone' }] }, 'смоук');
@@ -808,7 +817,7 @@ console.log(`✔ сид из строки → ${game.state.seed}, чанков $
   if (game.modTag(BY_KEY.get('probe_block') ? BY_KEY.get('probe_block').id : 1) !== '') throw new Error('тег автора пережил откат');
   localStorage.removeItem(M.MOD_KEY);
   function setModEnabledClean() { M.setModEnabled('probe', true, globalThis.localStorage); }
-  console.log('✔ свои моды: шейдер применяется на живом материале, панель показывает мод и его ручки, мод с блоками честно требует перезагрузки, откат чист');
+  console.log('✔ свои моды: загрузка в игре выключена (панели нет), API жив — шейдер применяется на живом материале, мод с блоками честно требует перезагрузки, откат чист');
 }
 
 // --- блок в руке: не уезжать за край при любом FOV и окне ---

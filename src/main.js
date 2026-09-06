@@ -8,6 +8,7 @@ import { createRenderer } from './render/renderer.js';
 
 import { Atlas } from './render/atlas.js';
 import { createVoxelMaterials } from './render/voxelMaterial.js';
+import { createBasicMaterials, createLiteMaterials } from './render/fallbackMaterial.js';
 // Мод-система: loadMods() обязан отработать ДО new Game(), потому что атлас
 // строится один раз в конструкторе и берёт тайлы из tiles.js (см. game/mods.js).
 import {
@@ -16,6 +17,10 @@ import {
   snapshot as modSnapshot, saveUserSource, readUserSource, setModEnabled,
   parseSource as parseModSource, setUniform as modSetUniform,
 } from './game/mods.js';
+/** Свои моды (файлы mods/, редактор в настройках, свои шейдеры) — выключены.
+ *true вернёт систему целиком: loadMods(), секция в настройках, game.mods. */
+export const MODS_IN_GAME = false;
+
 import { Sky } from './render/sky.js';
 import { ChunkView } from './render/chunkView.js';
 import { Particles } from './render/particles.js';
@@ -68,6 +73,8 @@ export class Game {
     } catch { this.atlasAniso = 1; }
     this.materials = createVoxelMaterials(this.atlas, modShaderChunks());
     this.watchVoxelProgram();   // если программа мода не соберётся — мир обязан остаться видимым
+    this._shaderTier = 0;
+    this.installShaderLadder(); // а если не собрался любой из них — ступень вниз, не пустой экран
     this.sky = new Sky(this.scene);
     // Тени: один directional light с ortho-камерой, следящей за игроком. Сам по
     // себе он ничего не красит (освещённость считает шейдер), только пишет карту.
@@ -202,7 +209,7 @@ export class Game {
       onRegenerate: () => { if (this.state.world) { this.state.world.rebuildAll?.(); this.chunkView?.rebuildAll(); } },
       // Панель «Моды»: список с выключением, редактор своего мода и применение
       // шейдеров на живом материале (без перезагрузки — только для чистых шейдеров).
-      mods: {
+      mods: MODS_IN_GAME ? {
         list: () => modSnapshot().mods,
         stats: () => {
           const snap = modSnapshot();
@@ -236,7 +243,7 @@ export class Game {
           if (ok) this.hud.toast(`${name} = ${value}`, 'ok');
           return ok;
         },
-      },
+      } : null,
       onLowSpec: () => {
         // Один клик для встроенного GPU и 4–8 ГБ памяти. Умышленно НЕ трогаем
         // renderDistance: запрос был «10 чанков и больше должны работать»,
@@ -1353,8 +1360,11 @@ export class Game {
    * renderer.shadowMap.enabled three вообще не компилирует ветку USE_SHADOWMAP.
    */
   applyLighting(s = this.settings) {
-    const ultra = (s.shaders | 0) >= 3;
-    const shadowOn = (s.shaders | 0) >= 2 && (s.shadows | 0) > 0;
+    // На запасной ступени (лёгкий/базовый материал) ни карта теней, ни куб-проба
+    // не нужны: их никто не читает, а кадр они стоят дорого.
+    const lite = (this._shaderTier ?? 0) > 0;
+    const ultra = (s.shaders | 0) >= 3 && !lite;
+    const shadowOn = (s.shaders | 0) >= 2 && (s.shadows | 0) > 0 && !lite;
     const radius = (s.shadows | 0) >= 2 ? 96 : 64;
     if (this.renderer.shadowMap) this.renderer.shadowMap.enabled = shadowOn;
     this.sunShadow?.setEnabled(shadowOn, radius);
@@ -1487,6 +1497,69 @@ export class Game {
     const text = `Шейдеры модов${who.length ? ` «${who.join('», «')}»` : ''} не скомпилировались — включены базовые. Починь код в Настройки → Моды`;
     this.hud?.toast(text, 'warn');
     console.warn('LiteCraft:', text);
+    return true;
+  }
+
+  /**
+   * Запасные ступени отрисовки мира. three зовёт debug.onShaderError, когда GPU
+   * не собрал программу (статус LINK_STATUS=false бывает и при ошибке компиляции
+   * фрагмента — линковать нечего). Для воксельного материала это «мира нет»,
+   * поэтому сразу спускаемся на лёгкий материал, а если и он не соберётся — на
+   * базовый. Пустой экран не имеет права быть исходом: мир обязан хоть как-то.
+   */
+  installShaderLadder() {
+    const dbg = this.renderer?.debug;
+    if (!dbg || dbg.onShaderError) return;
+    dbg.onShaderError = (gl, program, vs, fs) => {
+      let log = '';
+      let ours = true;
+      try {
+        log = [gl.getShaderInfoLog(vs), gl.getShaderInfoLog(fs)].filter(Boolean).join(' / ').trim();
+        const src = gl.getShaderSource(fs) || '';
+        // наш ли это материал: у неба, облаков и руки свои шейдеры, для них
+        // запасной путь — свой (postfx сам отключается, sky остаётся как есть)
+        if (src) ours = /uAlphaTest|vTint|tileIndex/.test(src);
+      } catch { /* контекст мог уже умереть — читаем что дали */ }
+      this._shaderLog = log.slice(0, 320);
+      if (ours) this.degradeVoxelShader();
+      else console.warn('LiteCraft: программа не собралась (не материал мира):', log.slice(0, 200));
+    };
+  }
+
+  /** Ступень вниз: основной → лёгкий → базовый. true, если материал заменён. */
+  degradeVoxelShader() {
+    const next = (this._shaderTier ?? 0) + 1;
+    if (next > 2 || !this.atlas) return false;
+    let mats = null;
+    try {
+      mats = next === 1
+        ? createLiteMaterials(this.atlas, this.materials?.uniforms)
+        : createBasicMaterials(this.atlas, this.materials?.uniforms);
+    } catch (e) {
+      console.warn('LiteCraft: запасной материал не собрался:', e?.message ?? e);
+      return false;
+    }
+    if (!mats || !mats.solid) return false;
+    this._shaderTier = next;
+    try { this.materials.solid.dispose(); this.materials.water.dispose(); } catch { /* уже удалён */ }
+    this.materials = mats;
+    this._reverted = true;             // моды больше не при чём: материал наш, запасной
+    this._progHook = true;            // сторож console.error больше не нужен
+    mats.setQuality?.(0);
+    // тени, карта теней и куб-проба в запасном режиме только жгут кадр
+    try {
+      if (this.renderer?.shadowMap) this.renderer.shadowMap.enabled = false;
+      this.sunShadow?.setEnabled(false);
+      this.probe?.setEnabled?.(false);
+    } catch { /* уже */ }
+    this._reflOn = false;
+    this.chunkView?.setShadows?.(false, null);
+    this.chunkView?.setMaterials?.(mats);
+    const txt = next === 1
+      ? 'Видеокарта не собрала шейдер мира — включён лёгкий материал (без теней и отражений). Мир виден.'
+      : 'Даже лёгкий шейдер не собрался — плоский режим: мир виден, но без света. Причина в F3.';
+    this.hud?.toast(txt, 'warn');
+    console.warn('LiteCraft:', txt, this._shaderLog || '');
     return true;
   }
 
@@ -1786,7 +1859,7 @@ export class Game {
     const mins = Math.floor((((this.state.time * 24 + 6) % 24) % 1) * 60);
     const cv = this.chunkView;
     this.hud.setDebug([
-      `LiteCraft · ${this.state.fps.toFixed(0)} FPS${this.settings.fpsLimit > 0 ? ` (лимит ${this.settings.fpsLimit})` : ' (лимит выключен)'} · ${this.state.ms.toFixed(1)} мс · шейдеры: ${['базовые', 'мягкие', 'красивые', 'ультра'][Math.max(0, Math.min(3, this.settings.shaders | 0))]}${this.post?.active ? ' · грейд' : ''}${hasShaders() ? ` · шейдеров мода: ${(modSnapshot().shaderNames || []).length}` : ''}${this._reverted ? ' · шейдеры мода выключены: не собрались' : ''}`,
+      `LiteCraft · ${this.state.fps.toFixed(0)} FPS${this.settings.fpsLimit > 0 ? ` (лимит ${this.settings.fpsLimit})` : ' (лимит выключен)'} · ${this.state.ms.toFixed(1)} мс · шейдеры: ${['базовые', 'мягкие', 'красивые', 'ультра'][Math.max(0, Math.min(3, this.settings.shaders | 0))]}${this.post?.active ? ' · грейд' : ''}${hasShaders() ? ` · шейдеров мода: ${(modSnapshot().shaderNames || []).length}` : ''}${this._reverted ? ' · шейдеры мода выключены: не собрались' : ''} · рендер: ${['полный', 'лёгкий', 'базовый'][this._shaderTier ?? 0]}${this._shaderLog ? ` — ${this._shaderLog.slice(0, 120)}` : ''}`,
       `XYZ ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}  чанк ${cx},${cz}  блок ${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`,
       `биом: ${biome}  ·  время ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}  ·  свет ${(sky.day * 15) | 0}/15`,
       `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount} · стриминг ${cv?.stats.ms?.toFixed(1) ?? 0} мс/кадр (${cv?.stats.frameMs?.toFixed(1) ?? '—'} мс кадр)${(() => { const d = cv?.streamDebug?.(); return d && (d.genErr || d.meshErr || d.light > 64) ? ` · сбой: ген ${d.genErr}, меш ${d.meshErr}, свет ${d.light}` : ''; })()}${this.inVillage ? ' · деревня' : ''}`,
@@ -1804,11 +1877,16 @@ export class Game {
 
 export function boot(deps = {}) {
   // Моды раньше игры: тайлы → блоки → рецепты → шейдеры (см. game/mods.js).
-  // Ошибки мода не имеют права остановить запуск — loadMods их собирает в список.
-  try {
-    loadMods();
-  } catch (e) {
-    console.warn('Моды не загрузились:', e);
+  // С v0.4.3 загрузка своих модов в игре выключена: MODS_IN_GAME. Причина —
+  // собственный GL из панели настроек мог не собраться на драйвере, а материал
+  // у мира один: не собрался = мир исчезает целиком. Игра при этом обязанна
+  // работать: запасные ступени в render/fallbackMaterial.js, диагностика в F3.
+  if (MODS_IN_GAME) {
+    try {
+      loadMods();
+    } catch (e) {
+      console.warn('Моды не загрузились:', e);
+    }
   }
   const game = new Game(deps);
   window.game = game;
