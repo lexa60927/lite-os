@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1b2126" />
+  <title>LiteCraft — воксельный мир</title>
+  <script type="module" crossorigin src="./assets/index-BtHuYM0o.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-BwxqMV3W.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="gl"></canvas>
+
+    <div id="hud" class="hidden">
+      <div id="crosshair"></div>
+      <div id="water-tint"></div>
+      <div id="vignette"></div>
+      <div id="hp"></div>
+      <div id="blockname"></div>
+      <div id="hotbar"></div>
+      <div id="debug" class="panel"></div>
+      <div id="toasts"></div>
+      <div id="touch-ui" class="hidden">
+        <div id="stick"><div id="stick-knob"></div></div>
+        <div class="tbtns">
+          <button id="t-jump" class="tbtn">⤒</button>
+          <button id="t-sneak" class="tbtn">⤓</button>
+          <button id="t-fly" class="tbtn">✈</button>
+          <button id="t-mine" class="tbtn">⛏</button>
+          <button id="t-place" class="tbtn">▣</button>
+          <button id="t-inv" class="tbtn">▦</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="loading" class="screen hidden">
+      <div class="panel box">
+        <h2>Генерация мира…</h2>
+        <div class="bar"><i id="load-fill"></i></div>
+        <div id="load-text" class="muted"></div>
+      </div>
+    </div>
+
+    <div id="menu" class="screen">
+      <div class="panel box main-menu">
+        <h1 class="title">Lite<span>Craft</span></h1>
+        <p class="tagline">трёхмерный воксельный мир прямо в браузере</p>
+        <div class="row">
+          <label class="field">
+            <span>Сид мира</span>
+            <input id="seed" type="text" placeholder="например, 42 или «крипер»" autocomplete="off" />
+          </label>
+          <button id="rnd-seed" class="btn ghost" title="Случайный сид">🎲</button>
+        </div>
+        <div class="row buttons">
+          <button id="play" class="btn primary">Играть</button>
+          <button id="open-settings" class="btn ghost">Настройки</button>
+          <button id="menu-net" class="btn ghost">Сеть</button>
+        </div>
+        <div id="worlds" class="worlds"></div>
+        <details class="controls">
+          <summary>Управление</summary>
+          <div id="controls-list" class="keys"></div>
+        </details>
+      </div>
+    </div>
+
+    <div id="pause" class="screen hidden">
+      <div class="panel box">
+        <h2>Пауза</h2>
+        <div class="row buttons">
+          <button id="resume" class="btn primary">Продолжить</button>
+          <button id="save-now" class="btn ghost">Сохранить</button>
+        </div>
+        <div class="row buttons">
+          <button id="pause-settings" class="btn ghost">Настройки</button>
+          <button id="pause-quit" class="btn ghost danger">В главное меню</button>
+        </div>
+        <div id="pause-stats" class="muted small"></div>
+      </div>
+    </div>
+
+    <div id="settings" class="screen hidden">
+      <div class="panel box">
+        <h2>Настройки</h2>
+        <div id="settings-body"></div>
+        <div class="row buttons">
+          <button id="settings-net" class="btn ghost">Сетевая игра</button>
+          <button id="settings-close" class="btn primary">Готово</button>
+        </div>
+        <p class="muted small">Настройки сохраняются в этом браузере.</p>
+      </div>
+    </div>
+
+
+    <div id="net" class="screen hidden">
+      <div class="panel box wide">
+        <h2>Сетевая игра</h2>
+        <div class="row net-cols">
+          <label class="field">
+            <span>Кем быть</span>
+            <div class="seg" id="net-role">
+              <button data-v="host" class="on">Хост (мой мир)</button>
+              <button data-v="guest">Гость (мир хоста)</button>
+            </div>
+          </label>
+          <label class="field">
+            <span>Имя игрока</span>
+            <input id="net-name" type="text" maxlength="24" autocomplete="off" placeholder="как тебя звать" />
+          </label>
+        </div>
+        <div class="row net-cols">
+          <label class="field wide">
+            <span>Адрес реле (из строки npm run net)</span>
+            <input id="net-url" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>Комната</span>
+            <input id="net-room" type="text" maxlength="32" autocomplete="off" spellcheck="false" placeholder="world" />
+          </label>
+        </div>
+        <div class="row buttons">
+          <button id="net-connect" class="btn primary">Через реле: играть</button>
+          <button id="net-stop" class="btn ghost danger">Выйти из сети</button>
+        </div>
+        <details class="controls net-p2p">
+          <summary>Вдвоём без сервера (WebRTC)</summary>
+          <p class="muted small">Хост нажимает «Создать код» и отправляет получившуюся строку второму
+            игроку так, как удобно (мессенджер, почта). Второй вставляет код, нажимает «Вставить и
+            ответить» и возвращает код обратно. Дальше мир общий, сервер не нужен.</p>
+          <div class="row buttons">
+            <button id="net-offer" class="btn ghost">Создать код приглашения</button>
+            <button id="net-answer" class="btn ghost">Вставить и ответить</button>
+          </div>
+          <label class="field wide">
+            <span>Коды: сюда вставлять, отсюда копировать</span>
+            <textarea id="net-code" rows="5" spellcheck="false" placeholder="вставить приглашение и нажать «Вставить и ответить»"></textarea>
+          </label>
+        </details>
+        <div id="net-status" class="net-status">сеть выключена</div>
+        <div id="net-peers" class="muted small"></div>
+        <div class="row net-chat hidden" id="net-chat-row">
+          <label class="field wide">
+            <span>Сообщение остальным</span>
+            <input id="net-chat" type="text" maxlength="160" autocomplete="off" placeholder="Enter — отправить" />
+          </label>
+        </div>
+        <p class="muted small">Мир по сети не передаётся: он одинаковый у всех из сида, поэтому летают
+          только позиция, правки блоков и чат. Своему реле: <code>npm run net</code>.</p>
+        <div class="row buttons">
+          <button id="net-close" class="btn primary">Закрыть</button>
+        </div>
+      </div>
+    </div>
+    <div id="inventory" class="screen hidden">
+      <div class="panel box wide">
+        <h2>Инвентарь <span class="muted small" id="inv-hint">клик по клетке — взять, клик по другой — положить · E / Esc — закрыть</span></h2>
+        <div class="inv-cols">
+          <div class="inv-left">
+            <div class="muted small">Рюкзак</div>
+            <div id="inv-grid" class="inv-grid slots27"></div>
+            <div class="row inv-slots">
+              <div class="muted small">Хотбар</div>
+              <div id="inv-hotbar" class="hotbar compact"></div>
+            </div>
+            <div id="inv-cursor" class="muted small cursor-line"></div>
+          </div>
+          <div class="inv-right">
+            <div class="muted small" id="inv-craft-title">Крафт</div>
+            <div id="inv-craft" class="craft-list"></div>
+            <div class="muted small" id="inv-palette-title">Палитра (творчество)</div>
+            <div id="inv-palette" class="inv-grid palette"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Покажем ошибку запуска прямо на экране вместо пустого холста.
+    window.__litecraftError = function (msg) {
+      var box = document.createElement('pre');
+      box.style.cssText = 'position:fixed;inset:auto 12px 12px 12px;max-height:45vh;overflow:auto;background:#2b0e0e;color:#ffd9d3;padding:14px;font:12px/1.5 ui-monospace,monospace;border:1px solid #612;border-radius:4px;z-index:9999;white-space:pre-wrap';
+      box.textContent = msg;
+      document.body.appendChild(box);
+    };
+    window.addEventListener('error', function (e) {
+      if (e.message && /ResizeObserver|WebGL context/i.test(e.message)) return;
+      window.__litecraftError('Ошибка: ' + e.message + (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      window.__litecraftError('Ошибка (promise): ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+    });
+  </script>
+</body>
+</html>
