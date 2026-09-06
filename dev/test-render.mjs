@@ -366,5 +366,67 @@ const read = async (rel) => {
   else ok('генерация не тронута: 8 новых id в ландшафте не встречаются');
 }
 
+// ── 10. вода «ультра» и рука: прозрачность по углу, зеркало неба, якорь на экране
+{
+  const frag = await read('src/render/voxelMaterial.js');
+  const checks = [
+    [/float alpha = uAlpha;/.test(frag), 'альфа — локальная, поэтому уровни «выкл/мягкие/красивые» не сдвинулись'],
+    [/gl_FragColor = vec4\(col, alpha\);/.test(frag), 'вывод берёт alpha из переменной'],
+    [/if \(uWave > 0\.5 && uQuality < 2\.5\)/.test(frag), 'подделка отражения уровня 2 уступает «ультре» (два mix друг друга гасят)'],
+    [/float facing = clamp\(dot\(V, nw\), 0\.0, 1\.0\)/.test(frag), 'есть угол взгляда — из него и прозрачность, и сила зеркала'],
+    [/refl \+= uSunColor \* \(pow\(rs, 420\.0\)/.test(frag), 'солнце в отражении — узким диском, а не размытым пятном'],
+    [/textureCube\(uProbe, R\)\.rgb, clamp\(uRefl \* \(1\.0 - up \* 0\.8\)/.test(frag), 'куб-проба мира не размывает отражение неба'],
+    [/alpha = mix\(0\.92, mix\(0\.30, 0\.92, clear\), step\(uSea, cameraPosition\.y\)\);/.test(frag), 'взгляд сверху вниз — дно видно; вскользь — зеркало; из-под воды — плотно'],
+    [!/gl_FragColor = vec4\(col, uAlpha\);/.test(frag), 'в шейдере не осталось старой константной альфы'],
+  ];
+  for (const [cond, msg] of checks) cond ? ok(msg) : bad('не так: ' + msg);
+
+  const vmSrc = await read('src/render/viewmodel.js');
+  const pairs = [
+    [/depthTest: false, depthWrite: false/.test(vmSrc), 'рука не пишет глубину (иначе она пробивает дыру в воде)'],
+    [/const light = 0\.46 \+ 0\.54 \* this\.dayLight;/.test(vmSrc), 'ночью блок в руке остаётся читаемым'],
+    [/layout\(fov = this\.fov, aspect = this\.aspect\)/.test(vmSrc), 'раскладка руки привязана к экрану, а не к frustum'],
+  ];
+  for (const [cond, msg] of pairs) cond ? ok(msg) : bad('не так: ' + msg);
+  if ((vmSrc.match(/depthTest: false, depthWrite: false/g) || []).length !== 2) bad('depthWrite: false должно быть и у кисти, и у блока');
+  else ok('оба материала руки не пишут глубину');
+
+  // ————— числа: раскладка не должна уезжать за экран ни при каком FOV/окне
+  const { ViewModel } = await import('../src/render/viewmodel.js');
+  const atlas = { texture: null, index: { dirt: 0 }, cell: 32, tile: 16, grid: 16, cracks: [null] };
+  const vm = new ViewModel(atlas);
+  vm.fov = 0; vm.aspect = 0;
+  vm.layout(70, 16 / 9);
+  const drift = Math.max(Math.abs(vm.baseBlock.x - 0.34), Math.abs(vm.baseBlock.y + 0.32), Math.abs(vm.blockSize - 0.34));
+  if (drift > 0.006) bad(`при FOV 70 и 16:9 рука сдвинулась на ${drift.toFixed(4)} — базовая картинка не должна меняться`);
+  else ok('FOV 70 / 16:9 — раскладка совпадает с прежней (0.34, −0.32, 0.34)');
+  let out = [];
+  for (const fov of [55, 60, 70, 80, 95, 110, 115]) {
+    for (const aspect of [0.5, 0.75, 1.0, 1.33, 1.6, 1.78, 2.4, 3.2]) {
+      vm.fov = 0; vm.aspect = 0;
+      vm.layout(fov, aspect);
+      const t = Math.tan((fov * Math.PI) / 180 / 2);
+      const hh = t * 0.62, hw = hh * aspect;
+      const r = vm.blockSize * 0.78;                  // полуширина повёрнутого куба
+      const b = vm.baseBlock;
+      if (Math.abs(b.x) + r > hw + 1e-6) out.push(`ширина ${fov}/${aspect}`);
+      // вниз блок имеет право свисать (почти на половину), но не больше
+      if (!(b.y < 0) || Math.abs(b.y) > hh + vm.blockSize * 0.6) out.push(`высота ${fov}/${aspect}`);
+      if (!(vm.blockSize > 0.05 && vm.blockSize < 0.9)) out.push(`размер ${fov}/${aspect}`);
+      if (!(vm.baseArm.x > 0 && vm.baseArm.y < 0)) out.push(`кисть ${fov}/${aspect}`);
+    }
+  }
+  if (out.length) bad(`рука уходит за край экрана при FOV/окне: ${out.slice(0, 6).join(', ')}`);
+  else ok('56 комбинаций FOV×окно: блок в руке целиком в кадре, кисть там же, где надо');
+
+  // ————— рамка цели не должна висеть над неотрисованным чанком
+  const cv = await read('src/render/chunkView.js');
+  const main = await read('src/main.js');
+  if (!/hasMesh\(cx, cz\) \{ return this\.objects\.has\(ChunkView\.key\(cx, cz\)\); \}/.test(cv)) bad('у ChunkView нет hasMesh(cx, cz)');
+  else ok('ChunkView.hasMesh есть');
+  if (!/this\.chunkView\.hasMesh\(st\.lastHit\.x >> 4, st\.lastHit\.z >> 4\)/.test(main)) bad('main.js не фильтрует рамку по отрисованным чанкам');
+  else ok('рамка выделения показывается только там, где блок уже нарисован');
+}
+
 console.log(fail ? `\nЕсть провалы: ${fail}` : '\nрендер и контент в порядке');
 process.exit(fail ? 1 : 0);

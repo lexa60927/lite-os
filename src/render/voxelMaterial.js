@@ -188,6 +188,7 @@ void main() {
   vec3 skyLight = (uAmbient * mix(vec3(1.08, 1.12, 1.2), vec3(1.0), shade)) + sunTerm;
   vec3 lit = skyLight * occ * lit0 + uTorch * blk * (0.25 + 0.75 * occ);
   vec3 col = tex.rgb * vTint * lit;
+  float alpha = uAlpha;         // вода в «ультре» делает её прозрачной по углу взгляда
   float sunGate = shade;                        // блики под деревом не нужны
 
   if (uQuality > 0.5 && uWave > 0.5) {
@@ -208,7 +209,9 @@ void main() {
     col += uSunColor * sp * 0.26 * sunGate;
     float rim = pow(1.0 - clamp(dot(nrm, V), 0.0, 1.0), 3.0);
     col += uFogColor * rim * 0.09 * sky;
-    if (uWave > 0.5) {
+    if (uWave > 0.5 && uQuality < 2.5) {
+      // Этот приём — подделка отражения для уровня «красивые»; в «ультре» ниже
+      // лежит настоящий, и держать оба нельзя: они гасят друг друга.
       vec3 V2 = normalize(cameraPosition - vWorld);
       float fr = pow(1.0 - clamp(dot(nrm, V2), 0.0, 1.0), 3.0);
       col = mix(col, uFogColor * (0.72 + 0.5 * uSun * sky), fr * 0.5);
@@ -224,18 +227,31 @@ void main() {
       vec2 sl = waterSlope(vWorld.xz, uTime);
       vec3 nw = normalize(vec3(-sl.x, 1.0, -sl.y));
       vec3 V = normalize(cameraPosition - vWorld);
+      float facing = clamp(dot(V, nw), 0.0, 1.0);     // 1 — смотрим сверху вниз
       vec3 R = reflect(-V, nw);
+      // Небо в отражении считаем аналитически: оно резкое, живое и бесплатное
+      // (никакого bloom — только законное отражение солнца на волне). Куб-проба
+      // мира подключается вниз по лучу и у горизонта: вверху она лишь размывала
+      // небо в мутное пятно, из-за чего вода выглядела нарисованной.
+      float up = clamp(R.y * 2.2, 0.0, 1.0);
       vec3 refl = skyLike(R, uFogColor, uZenithC, clamp(uSun, 0.0, 1.2));
-      if (uRefl > 0.01) refl = mix(refl, textureCube(uProbe, R).rgb, uRefl * 0.8);
-      float fr = pow(1.0 - clamp(dot(V, nw), 0.0, 1.0), 4.2);
-      col = mix(col, refl, clamp(0.12 + fr * 0.5, 0.0, 0.58));
+      float rs = max(dot(R, uSunDirW), 0.0);
+      refl += uSunColor * (pow(rs, 420.0) * 1.3 + pow(rs, 16.0) * 0.3) * clamp(uSun, 0.05, 1.0);
+      if (uRefl > 0.01) refl = mix(refl, textureCube(uProbe, R).rgb, clamp(uRefl * (1.0 - up * 0.8), 0.0, 0.92));
+      float fr = pow(1.0 - facing, 4.2);
+      col = mix(col, refl, clamp(0.14 + fr * 0.72, 0.0, 0.86));
       // дорожка солнца: узкий пик + широкий лепесток; под тенью дерева гаснет
       vec3 H = normalize(uSunDirW + V);
       float sd = max(dot(uSunDirW, nw), 0.0) * sunGate;
-      float spk = pow(max(dot(nw, H), 0.0), 220.0) * 1.05 + pow(max(dot(nw, H), 0.0), 26.0) * 0.1;
+      float spk = pow(max(dot(nw, H), 0.0), 220.0) * 1.15 + pow(max(dot(nw, H), 0.0), 24.0) * 0.12;
       col += uSunColor * spk * sd * clamp(uSun, 0.0, 1.0);
       // ночная вода не чёрная: в ней живёт лунный свет и звёздное небо
-      col += uZenithC * 0.035 * (1.0 - clamp(uSun, 0.0, 1.0));
+      col += uZenithC * 0.05 * (1.0 - clamp(uSun, 0.0, 1.0));
+      // И главное — прозрачность: сверху вниз вода почти невидима (виден грунт и
+      // песок у берега), вскользь — зеркало. Из-под воды поверхность плотная,
+      // иначе вид сквозь неё вверх выглядел бы дырой в мире.
+      float clear = 1.0 - smoothstep(0.12, 0.92, facing);
+      alpha = mix(0.92, mix(0.30, 0.92, clear), step(uSea, cameraPosition.y));
     } else {
       // ————— ЗЕМЛЯ: тёплый ободок против солнца и лёгкий подсвет неба сверху
       vec3 V = normalize(cameraPosition - vWorld);
@@ -273,7 +289,7 @@ void main() {
   }
   // Вторая точка: уже после дымки — для «экранного» вида (скан-линии, плёнка).
   /*MOD_FINAL*/
-  gl_FragColor = vec4(col, uAlpha);
+  gl_FragColor = vec4(col, alpha);
 }
 `;
 

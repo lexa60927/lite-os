@@ -6,6 +6,22 @@ import { CRACK_STAGES } from './cracks.js';
 
 const SHADE = [0.76, 0.76, 1.0, 0.55, 0.9, 0.9];
 
+/**
+ * Позиция руки задаётся ДОЛЯМИ ЭКРАНА, а не мировыми единицами. Иначе вид от
+ * первого лица разъезжается: при FOV 110 (бег/полёт) тот же офсет в 0.34
+ * оказывается ближе к центру, а на узком окне или при малом FOV — за правым
+ * краем, и «блок в руке» просто пропадал. Единичные доли сняты с прежней
+ * раскладки при FOV 70 и окне 16:9, поэтому по умолчанию картинка та же.
+ */
+const LAYOUT = {
+  fov: 70,                                  // базовый FOV, от которого считали доли
+  block: { fx: 0.4406, fy: 0.7372, size: 0.7833, depth: 0.62 },
+  arm: { fx: 0.3212, fy: 0.857, depth: 0.6 },
+};
+
+/** tan(половины вертикального угла обзора) — сколько world-единиц на единицу глубины. */
+const tanHalf = (fovDeg) => Math.tan(((fovDeg || LAYOUT.fov) * Math.PI) / 360);
+
 /** Куб с UV из атласа и печёной яркостью граней. */
 export function blockCubeGeometry(def, atlas, size = 1) {
   const pos = [];
@@ -43,9 +59,12 @@ export class ViewModel {
     this.blockMesh = null;
     this.blockId = -1;
 
+    // depthWrite: false обязательно: с записью глубины рука оставляла дыру в
+    // прозрачном проходе — вода вокруг блока обрывалась, и казалось, что блок
+    // «заходит в воду».
     this.arm = new THREE.Mesh(
       new THREE.BoxGeometry(0.16, 0.5, 0.14),
-      new THREE.MeshBasicMaterial({ color: 0xd9a06a, depthTest: false }),
+      new THREE.MeshBasicMaterial({ color: 0xd9a06a, depthTest: false, depthWrite: false }),
     );
     const armGeo = this.arm.geometry;
     const colors = new Float32Array((armGeo.attributes.position.count / 4) * 4 * 3);
@@ -65,6 +84,9 @@ export class ViewModel {
 
     this.baseBlock = new THREE.Vector3(0.34, -0.32, -0.62);
     this.baseArm = this.arm.position.clone();
+    this.blockSize = 0.34;              // ребро куба в мировых единицах (считается в layout)
+    this.fov = LAYOUT.fov;
+    this.aspect = 16 / 9;
     this.swing = 0;
     this.swingActive = 0;
     this.bobPhase = 0;
@@ -81,19 +103,63 @@ export class ViewModel {
     }
     const def = BLOCKS[id];
     if (!def || !def.tiles) { this.arm.visible = true; return; }
-    const g = blockCubeGeometry(def, this.atlas, 0.34);
-    const m = new THREE.MeshBasicMaterial({ map: this.atlas.texture, vertexColors: true, side: THREE.DoubleSide, depthTest: false });
+    // Куб строится единичным: размер рука получает через scale в layout(), иначе
+    // при смене FOV блок менял бы величину вместе с перспективой.
+    const g = blockCubeGeometry(def, this.atlas, 1);
+    const m = new THREE.MeshBasicMaterial({ map: this.atlas.texture, vertexColors: true, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
     this.blockMesh = new THREE.Mesh(g, m);
     this.blockMesh.position.copy(this.baseBlock);
+    this.blockMesh.scale.setScalar(this.blockSize);
     this.blockMesh.rotation.set(0.1, -0.72, 0.12);
     this.blockMesh.renderOrder = 999;
     this.group.add(this.blockMesh);
     this.arm.visible = false;
   }
 
+  /**
+   * Пересчитать раскладку под текущие FOV и пропорции окна. Вызывается из update(),
+   * когда что-то из них поменялось (настройка, бег, под/над водой, resize).
+   * Возвращает false, если менять нечего — тогда вызывающий может не трогать меш.
+   */
+  layout(fov = this.fov, aspect = this.aspect) {
+    const a = Number.isFinite(fov) && fov > 1 ? fov : LAYOUT.fov;
+    const b = Number.isFinite(aspect) && aspect > 0.2 ? aspect : 16 / 9;
+    if (a === this.fov && Math.abs(b - this.aspect) < 1e-4) return false;
+    this.fov = a;
+    this.aspect = b;
+    const t = tanHalf(a);
+    // Половина высоты/ширины экрана в мировых единицах на глубине руки.
+    const half = (d) => ({ h: t * d, w: t * d * b });
+    const hb = half(LAYOUT.block.depth);
+    // Размер: доля экрана, но не шире половины ширины окна — иначе на вертикальном
+    // окне рука заняла бы весь экран.
+    const size = Math.min(LAYOUT.block.size * hb.h, 0.62 * hb.w);
+    const lim = size * 0.9;                        // половина повёрнутого куба на экране
+    this.blockSize = size;
+    // По горизонтали блок обязан остаться в кадре, по вертикали — только его центр:
+    // нижняя половина специально свисает за край, так блок и выглядит «в руке», а не
+    // наклейкой по центру экрана.
+    this.baseBlock.set(
+      Math.min(LAYOUT.block.fx * hb.w, hb.w - lim),
+      -Math.min(LAYOUT.block.fy * hb.h, hb.h + size * 0.55),
+      -LAYOUT.block.depth,
+    );
+    const ha = half(LAYOUT.arm.depth);
+    const as = size / 0.34;                        // кисть растёт вместе с блоком
+    this.arm.scale.setScalar(as);
+    this.baseArm.set(
+      Math.min(LAYOUT.arm.fx * ha.w, ha.w - 0.15 * as),
+      -Math.min(LAYOUT.arm.fy * ha.h, ha.h + 0.6 * as),
+      -LAYOUT.arm.depth,
+    );
+    return true;
+  }
+
   triggerSwing() { this.swingActive = 1; }
 
-  update(dt, { moving = 0, breaking = 0, breakProgress = 0 }) {
+  update(dt, { moving = 0, breaking = 0, breakProgress = 0, fov = 0, aspect = 0 } = {}) {
+    if (fov || aspect) this.layout(fov || this.fov, aspect || this.aspect);
+    if (this.blockMesh) this.blockMesh.scale.setScalar(this.blockSize);
     this.bobPhase += dt * (2 + moving * 7);
     this.swingActive = Math.max(0, this.swingActive - dt * 3.4);
     const s = this.swingActive;
@@ -104,14 +170,17 @@ export class ViewModel {
 
     const target = this.blockMesh ?? this.arm;
     if (this.blockMesh) {
-      this.blockMesh.position.set(this.baseBlock.x + bobX + breakShake, this.baseBlock.y - bobY, this.baseBlock.z + swingAngle * 0.12);
+      const k = this.blockSize / 0.34;   // замах и покачивание — в тех же долях экрана
+      this.blockMesh.position.set(this.baseBlock.x + (bobX + breakShake) * k, this.baseBlock.y - bobY * k, this.baseBlock.z + swingAngle * 0.12 * k);
       this.blockMesh.rotation.set(0.1 - swingAngle * 0.7, -0.72, 0.12 + swingAngle * 0.25);
     }
     this.arm.position.set(this.baseArm.x + bobX + breakShake, this.baseArm.y - bobY, this.baseArm.z + swingAngle * 0.14);
     this.arm.rotation.set(0.5 - swingAngle * 0.9, 0, 0.1);
     void target;
 
-    const light = 0.28 + 0.72 * this.dayLight;
+    // Пол не ниже 0.46: раньше рука на ночь затемнялась до 0.28 и блок в руке
+    // сливался с ночным небом — выглядело как «предмет пропал».
+    const light = 0.46 + 0.54 * this.dayLight;
     const tint = new THREE.Color(light, light, light * 1.02);
     if (this.blockMesh) this.blockMesh.material.color.copy(tint);
     this.arm.material.color.copy(tint);

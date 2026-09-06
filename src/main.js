@@ -1581,7 +1581,10 @@ export class Game {
     const dir = this.player.forward({});
     const eye = { x: cam.position.x, y: cam.position.y, z: cam.position.z };
     st.lastHit = raycast(world, eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, 6.2);
-    this.target.show(st.lastHit);
+    // Рамку показываем, только если у чанка с целью уже есть меш: на краю
+    // дистанции блок уже есть в данных, но ещё не отрисован — без этой проверки
+    // в небе висит пустая рамка («призрачный блок»).
+    this.target.show(st.lastHit && this.chunkView.hasMesh(st.lastHit.x >> 4, st.lastHit.z >> 4) ? st.lastHit : null);
     if (!st.lastHit) this.target.setBreakProgress(0);
 
     // действия
@@ -1593,7 +1596,13 @@ export class Game {
     // мир
     this.chunkView.update(this.player);
     this.particles.update(dt);
-    this.viewModel.update(dt, { moving: Math.min(1, Math.hypot(this.player.vx, this.player.vz) / 5), breaking: this.input.mine && st.lastHit ? 1 : 0, breakProgress: st.breakProgress });
+    this.viewModel.update(dt, {
+      moving: Math.min(1, Math.hypot(this.player.vx, this.player.vz) / 5),
+      breaking: this.input.mine && st.lastHit ? 1 : 0,
+      breakProgress: st.breakProgress,
+      fov: cam.fov,                       // рука привязана к экрану, а не к frustum
+      aspect: cam.aspect,
+    });
 
     // небо/свет
     if (!this.settings.freeTime) st.time = (st.time + dt / (this.settings.dayLength * 60)) % 1;

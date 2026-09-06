@@ -790,6 +790,38 @@ console.log(`✔ сид из строки → ${game.state.seed}, чанков $
   console.log('✔ свои моды: шейдер применяется на живом материале, панель показывает мод и его ручки, мод с блоками честно требует перезагрузки, откат чист');
 }
 
+// --- блок в руке: не уезжать за край при любом FOV и окне ---
+{
+  const THREE = await import('three');
+  const cam = game.camera;
+  const keep = { fov: cam.fov, aspect: cam.aspect };
+  const p = new THREE.Vector3();
+  const { byKey } = await import('../src/engine/blocks.js');
+  game.inv.hot[0] = byKey('dirt');                  // предмет в руке должен быть блоком, а не пустотой
+  game.viewModel.setBlock(byKey('dirt'));
+  if (!game.viewModel.blockMesh) throw new Error('блок в руке не превратился в меш');
+  const out = [];
+  for (const fov of [55, 70, 90, 110]) {
+    for (const aspect of [0.6, 1.0, 1.78, 2.6]) {
+      cam.fov = fov; cam.aspect = aspect;
+      cam.updateProjectionMatrix();
+      cam.updateMatrixWorld(true);
+      game.viewModel.update(1 / 60, { moving: 0, breaking: 0, breakProgress: 0, fov, aspect });
+      game.camera.updateMatrixWorld(true);
+      p.setFromMatrixPosition(game.viewModel.blockMesh.matrixWorld).project(cam);
+      // по горизонтали блок обязан быть в кадре, внизу может свисать (так задумано)
+      if (Math.abs(p.x) > 0.98 || p.y > -0.05 || p.y < -1.9) out.push(`${fov}/${aspect}: ${p.x.toFixed(2)},${p.y.toFixed(2)}`);
+    }
+  }
+  cam.fov = keep.fov; cam.aspect = keep.aspect;
+  cam.updateProjectionMatrix();
+  game.viewModel.update(1 / 60, { fov: keep.fov, aspect: keep.aspect });
+  if (out.length) throw new Error('блок в руке уезжает за край: ' + out.slice(0, 4).join(' | '));
+  console.log('✔ блок в руке в кадре при FOV 55…110 и окне 0.6…2.6 (по ширине), свисает вниз как задумано');
+  if (game.viewModel.blockMesh.material.depthWrite !== false) throw new Error('рука пишет глубину — на воде будет дыра');
+  console.log('✔ рука не пишет глубину — поверхность воды вокруг неё не рвётся');
+}
+
 game.audio.stopMusic();
 await dom.__pumpFrames(5);
 if (errors.length) {
