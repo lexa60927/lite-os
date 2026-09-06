@@ -30,6 +30,9 @@ varying vec3 vWorld;
 uniform float uTime;
 uniform float uWave;
 uniform float uQuality;
+uniform float uDay;      // доля дня (1 = полдень, 0 = ночь) — нужны модам
+uniform float uDusk;     // закат 0..1
+uniform float uNight;    // 1 - день: «ночные» мод-эффекты
 uniform float uFogDensity;
 uniform float uFogStart;
 uniform float uFogEnd;
@@ -37,6 +40,7 @@ uniform float uFogEnd;
 // заданы самим <shadowmap_vertex>, поэтому их не «выбираем», а исполняем.
 #include <common>
 #include <shadowmap_pars_vertex>
+/*MOD_DECL*/
 
 void main() {
   vUv = uv;
@@ -61,6 +65,9 @@ void main() {
     }
   }
   vWorld = world.xyz;
+  // Сюда вставляет код мод (см. mods.js): world уже посчитан, mv — ещё нет,
+  // поэтому модель может двигать вершину и её успевает увидеть туман и тени.
+  /*MOD_VERT*/
   vec4 mv = viewMatrix * world;
   float d = length(mv.xyz);
   // Поздний линейный туман: до uFogStart мир абсолютно чистый, плотнеет только
@@ -93,6 +100,18 @@ uniform float uAlphaTest;
 uniform float uExposure;
 uniform float uQuality;
 uniform vec3 uSunDirW;
+/*MOD_DECL*/
+/**
+ * Номер тайла атласа под пикселем. Нужен модам: id блока в геометрии не лежит
+ * (меш — просто квады), а тайл — единственная подсказка о том, ЧТО это за блок.
+ * UV лежит внутри 16px тайла в 32px ячейке (tileRect), поэтому floor(vUv*16)
+ * и есть номер ячейки = номер тайла.
+ */
+float tileIndex() {
+  float gx = floor(clamp(vUv.x, 0.0, 0.9999) * 16.0);
+  float gy = floor(clamp(vUv.y, 0.0, 0.9999) * 16.0);
+  return gy * 16.0 + gx;
+}
 uniform vec3 uZenithC;
 uniform float uSea;
 uniform float uWave;
@@ -226,6 +245,9 @@ void main() {
     }
   }
 
+  // Вставка мода над тонмаппингом: тут col — «албедо × свет», то, что правят
+  // обычно (оттенок, свечение руды, тон по тайлу).
+  /*MOD_FRAG*/
   col = clamp(col, 0.0, 1.45) * uExposure;
   if (uQuality > 1.5) {
     col = aces(col);
@@ -249,17 +271,71 @@ void main() {
   } else {
     col = mix(col, uFogColor, fg);
   }
+  // Вторая точка: уже после дымки — для «экранного» вида (скан-линии, плёнка).
+  /*MOD_FINAL*/
   gl_FragColor = vec4(col, uAlpha);
 }
 `;
 
-export function createVoxelMaterials(atlas) {
+/** Тип GLSL по форме значения униформы: число → float, {x,y} → vec2, {x,y,z} → vec3. */
+export function glslTypeOf(v) {
+  // mods.js отдаёт значения уже в форме three ({x,y,z}); массивы принимаем на случай
+  // вызова напрямую (game.mods, тесты) — и то, и другое three понимает одинаково.
+  if (Array.isArray(v)) return v.length >= 4 ? 'vec4' : v.length === 3 ? 'vec3' : v.length === 2 ? 'vec2' : '';
+  if (v && typeof v === 'object') {
+    if (v.w !== undefined) return 'vec4';
+    if (v.z !== undefined) return 'vec3';
+    if (v.y !== undefined) return 'vec2';
+    return '';
+  }
+  return typeof v === 'number' || typeof v === 'boolean' ? 'float' : '';
+}
+
+/**
+ * Подстановка кода модов в якоря MOD_VERT / MOD_FRAG / MOD_FINAL. Без модов
+ * возвращаются ровно VOXEL_VERT/VOXEL_FRAG без строк-якорей: «шейдеры мода» не
+ * имеют права менять базовую картинку — это проверяется тестом на совпадение строк.
+ */
+export function buildVoxelShaders(mods = {}) {
+  const list = (x) => (Array.isArray(x) ? x : []);
+  const code = (items) => items.map((it) => `\n  // ——— шейдер мода «${it.mod}»\n${it.code}`).join('');
+  const decl = mods.uniforms
+    ? Object.entries(mods.uniforms).map(([name, v]) => glslTypeOf(v)).filter(Boolean)
+      .map((t, i) => `uniform ${t} ${Object.keys(mods.uniforms)[i]};`).join('\n')
+    : '';
+  // Якорь — отдельная строка с комментарием. Если вставлять нечего, строку надо
+  // убрать целиком, иначе в GPU-исходник попадёт пустая строка и «без модов» уже
+  // не будет равно «как до мод-системы» (за этим и следит dev/test-mods.mjs).
+  const inject = (src, name, text) => {
+    const marker = new RegExp(`[ \\t]*/\\*${name}\\*/[ \\t]*\\n?`);
+    return text ? src.replace(marker, () => `${text.trim()}\n`) : src.replace(marker, '');
+  };
+  // Каждый мод живёт в своём блоке { … }: локальные переменные модов не сталкиваются
+  // ни с нашими, ни между собой (переопределить col всё равно нельзя — см. mods.js).
+  const block = (items) => (items.length ? code(items.map((it) => ({ mod: it.mod, code: `{\n    ${it.code}\n  }` }))) : '');
+  let vert = inject(VOXEL_VERT, 'MOD_DECL', decl);
+  vert = inject(vert, 'MOD_VERT', block(list(mods.vert)));
+  let frag = inject(VOXEL_FRAG, 'MOD_DECL', decl);
+  frag = inject(frag, 'MOD_FRAG', block(list(mods.frag)));
+  frag = inject(frag, 'MOD_FINAL', block(list(mods.fragFinal)));
+  return { vertexShader: vert, fragmentShader: frag };
+}
+
+export function createVoxelMaterials(atlas, mods = {}) {
   // `lights: true` обязывает материал нести light-униформы: THREE не подмешивает
   // UniformsLib.lights в ShaderMaterial сам, а WebGLRenderer на каждом кадре пишет
   // uniforms.directionalLights.value = … — без этих ключей первый же кадр с
   // включёнными тенями падает с «Cannot set properties of undefined (setting
   // 'needsUpdate')». Клонируем: три обновляет эти объекты на программу.
+  // Код модов вставляется один раз при создании материалов: три не пересобирает
+  // программу по смене исходника, поэтому «применить мод с новым шейдером» =
+  // пересоздать материалы (Game.applyModShaders), либо перезагрузка.
+  const SHADERS = buildVoxelShaders(mods);
+  const modUniforms = mods.uniforms
+    ? Object.fromEntries(Object.entries(mods.uniforms).map(([k, v]) => [k, { value: v }]))
+    : {};
   const shared = {
+    ...modUniforms,
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.lights),
     uMap: { value: atlas.texture },
     uTime: { value: 0 },
@@ -276,6 +352,9 @@ export function createVoxelMaterials(atlas) {
     uSunDirW: { value: new THREE.Vector3(0, 1, 0) },
     uSea: { value: SEA_TOP },   // дымка по высоте считается от верхушки воды
     uZenithC: { value: new THREE.Color(0.19, 0.4, 0.86) },   // зенит — для отражений воды
+    uDay: { value: 1 },         // доля дня: модам для «ночных» эффектов
+    uDusk: { value: 0 },        // закат 0..1
+    uNight: { value: 0 },       // 1 - день
     uShadow: { value: 0 },      // сила теней: 0 = тени выключены (картинка как прежде)
     uRefl: { value: 0 },        // доля отражения «мира» (куб-пробы) в воде
     uProbe: { value: null },
@@ -289,8 +368,8 @@ export function createVoxelMaterials(atlas) {
         uAlpha: { value: opts.alpha },
         uAlphaTest: { value: opts.alphaTest },
       },
-      vertexShader: VOXEL_VERT,
-      fragmentShader: VOXEL_FRAG,
+      vertexShader: SHADERS.vertexShader,
+      fragmentShader: SHADERS.fragmentShader,
       transparent: opts.transparent,
       side: THREE.DoubleSide,
       depthWrite: true,

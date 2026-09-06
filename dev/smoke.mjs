@@ -734,6 +734,62 @@ await startWithPump('крипер');
 await dom.__pumpFrames(150);
 console.log(`✔ сид из строки → ${game.state.seed}, чанков ${game.state.world.chunkCount}`);
 
+// --- свои моды и шейдеры ---
+{
+  const M = await import('../src/game/mods.js');
+  M.resetMods();
+  const probe = M.register('probe', {
+    id: 'probe', name: 'Проба',
+    shader: { name: 'Проба', uniforms: { uK: 0.3 }, frag: 'col *= 1.0 + uK * 0.1;', post: 'c.rgb *= 1.0 - uK * 0.05;' },
+  }, 'смоук');
+  if (!probe.ok) throw new Error('мод-проба не применился: ' + probe.error);
+  if (!game.applyModShaders()) throw new Error('чистый шейдер-мод потребовал перезагрузки');
+  if (!(game.materials.solid.fragmentShader || '').includes('шейдер мода «probe»')) throw new Error('код мода не попал в материал');
+  if (!(game.materials.water.fragmentShader || '').includes('шейдер мода «probe»')) throw new Error('вода осталась без мода');
+  if (game.mods.setUniform('uK', 0.9) !== true) throw new Error('setUniform не применился');
+  if (Math.abs(game.materials.uniforms.uK.value - 0.9) > 1e-6) throw new Error('ручка мода не дошла до материала');
+
+  // панель настроек обязана показать секцию и управления
+  game.openSettings('pause');
+  const walk = (el, acc = []) => { for (const c of (el && el.children) || []) { acc.push(c); walk(c, acc); } return acc; };
+  const nodes = walk(document.getElementById('settings-body'));
+  const texts = nodes.map((e) => e.textContent || '');
+  if (!nodes.some((e) => e.tagName === 'TEXTAREA')) throw new Error('в настройках нет поля для своего мода');
+  for (const need of ['Моды и свои шейдеры', 'Проба', 'Применить шейдеры сейчас', 'Сохранить мод', 'uK']) {
+    if (!texts.some((t) => t.includes(need))) throw new Error('в секции модов нет «' + need + '»');
+  }
+  // чекбоксов в настройках много (ao, тени, …) — ищем именно строку нашего мода:
+  // div, у которого первый ребёнок — checkbox, а второй несёт имя мода
+  const row = nodes.find((e) => (e.children || []).length === 2
+    && e.children[0].tagName === 'INPUT' && e.children[0].type === 'checkbox'
+    && String(e.children[1].textContent || '').includes('Проба'));
+  const cb = row && row.children[0];
+  if (!cb) throw new Error('у мода нет чекбокса включения');
+  if (cb.checked !== true) throw new Error('включённый мод показан выключенным');
+  cb.checked = false;
+  if (typeof cb.onchange !== 'function') throw new Error('чекбокс мода без обработчика');
+  cb.onchange();
+  if (!JSON.parse(localStorage.getItem(M.MOD_KEY) || '{}').disabled?.includes('probe')) throw new Error('выключение мода не записалось в хранилище');
+  else setModEnabledClean();
+
+  // чужие сохранения: мода с блоками применяются только перезагрузкой — панель обязана это сказать
+  const withBlocks = M.register('withb', { id: 'withb', name: 'С блоком', blocks: [{ key: 'probe_block', name: 'Пробный блок', tile: 'stone' }] }, 'смоук');
+  if (!withBlocks.ok) throw new Error('мод с блоком не применился: ' + withBlocks.error);
+  if (game.applyModShaders() !== false) throw new Error('мод с блоками применился на живом материале — так id разъедутся с миром');
+  const { BY_KEY } = await import('../src/engine/blocks.js');
+  const tag = game.modTag(BY_KEY.get('probe_block').id);
+  if (!tag.includes('withb')) throw new Error('в подсказке не видно автора блока: «' + tag + '»');
+  if (game.modTag(1) !== '') throw new Error('ванильный блок помечен как модовый');
+
+  M.resetMods();
+  if (!game.applyModShaders()) throw new Error('после отката не удалось вернуть прежний материал');
+  if ((game.materials.solid.fragmentShader || '').includes('probe')) throw new Error('resetMods оставил код мода в шейдере');
+  if (game.modTag(BY_KEY.get('probe_block') ? BY_KEY.get('probe_block').id : 1) !== '') throw new Error('тег автора пережил откат');
+  localStorage.removeItem(M.MOD_KEY);
+  function setModEnabledClean() { M.setModEnabled('probe', true, globalThis.localStorage); }
+  console.log('✔ свои моды: шейдер применяется на живом материале, панель показывает мод и его ручки, мод с блоками честно требует перезагрузки, откат чист');
+}
+
 game.audio.stopMusic();
 await dom.__pumpFrames(5);
 if (errors.length) {

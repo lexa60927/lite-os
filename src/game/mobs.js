@@ -487,4 +487,57 @@ export class Mobs {
   }
 }
 
+/** Имена для подсказок. Объявлено до addMobTypes, потому что дописывает сюда же. */
 export const MOB_NAMES = Object.fromEntries(Object.entries(MOB_TYPES).map(([k, v]) => [k, v.name]));
+
+/**
+ * Свой моб из мода: либо готовый `parts`, либо `color` + размеры — тогда туловище,
+ * голова и четыре ноги соберутся по той же схеме, что у свиньи и коровы (модель
+ * центрирована у земли: ноги с отрицательным y). Возвращает список ключей, чтобы
+ * mods.js умел откатывать ровно добавленное.
+ */
+export function addMobTypes(mod, specs, addPainter = () => {}) {
+  const keys = [];
+  for (const [key, mo] of Object.entries(specs || {})) {
+    if (!mo || MOB_TYPES[key] || !/^[a-z][a-z0-9_]*$/.test(key)) continue;
+    const tile = mo.tile || `mob_${key}`;
+    const h = +(mo.h ?? mo.size ?? 1) || 1;
+    const w = +(mo.w ?? mo.size ?? 0.8) || 0.8;
+    let parts = mo.parts;
+    if (!parts) {
+      addPainter(tile, { base: mo.color || '#8a7f6a', grain: 3, seed: key.length * 31 + 5 });
+      const leg = Math.max(0.16, h * 0.34);
+      parts = [
+        { p: [0, h * 0.26, 0], s: [w * 0.9, h * 0.52, w * 0.95], tile, shade: 1 },
+        { p: [0, h * 0.3, -w * 0.6], s: [w * 0.56, w * 0.56, w * 0.4], tile, shade: 0.96 },
+        { p: [-w * 0.3, -leg, w * 0.2], s: [w * 0.24, leg, w * 0.24], tile, shade: 0.7, limb: 1 },
+        { p: [w * 0.3, -leg, w * 0.2], s: [w * 0.24, leg, w * 0.24], tile, shade: 0.7, limb: 1 },
+        { p: [-w * 0.3, -leg, -w * 0.22], s: [w * 0.24, leg, w * 0.24], tile, shade: 0.7, limb: 1 },
+        { p: [w * 0.3, -leg, -w * 0.22], s: [w * 0.24, leg, w * 0.24], tile, shade: 0.7, limb: 1 },
+      ];
+    }
+    const def = {
+      name: String(mo.name || key),
+      hp: +mo.hp || 10, w, h, speed: +mo.speed || 1.6,
+      passive: mo.hostile ? false : mo.passive !== false,
+      aggro: +mo.aggro || (mo.hostile ? 14 : 0),
+      hostile: !!mo.hostile,
+      damage: +mo.damage || (mo.hostile ? 2 : 0),
+      reach: +mo.reach || 1.7,
+      burnsInSun: !!mo.burnsInSun,
+      jumps: !!mo.jumps,
+      darkOnly: !!mo.darkOnly,
+      villageOnly: !!mo.villageOnly,
+      mod,
+      parts,
+      drops: () => (mo.drops || [])
+        .map((d) => ({ id: byKey(typeof d === 'string' ? d : (d.block || d.item || d.key)) || 0, n: Math.max(1, (d && d.n) | 0 || 1) }))
+        .filter((d) => d.id),
+    };
+    MOB_TYPES[key] = def;
+    MOB_NAMES[key] = def.name;
+    keys.push(key);
+  }
+  return keys;
+}
+

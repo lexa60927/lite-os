@@ -72,6 +72,10 @@ export class World {
     // а видеть нечего. Это и были «прозрачные чанки».
     try {
       this.terrain.generate(c);
+      // Проход модов (свои руды) — ПОСЛЕ генерации и ДО правок игрока: ванильный
+      // мир от отсутствия мода не меняется вообще, а изменённое игроком всегда
+      // важнее того, что нагенерировал мод.
+      if (this.modPass) this.modPass(this, c);
       this.applyEdits(c);
       this.finalize(c);
     } catch (e) {
@@ -387,6 +391,10 @@ export class World {
       if (at < 0) continue;
       const key = item.slice(0, at);
       const id = +item.slice(at + 1);
+      // Id из сохранения, которого нет в текущем наборе блоков (мод с блоками
+      // выключили), в чанк класть нельзя: mesher читает BLOCKS[id] и упал бы на
+      // пустоте — весь чанк стал бы невидимым. Пропускаем такие правки.
+      if (!Number.isInteger(id) || id < 0 || id >= BLOCKS.length) continue;
       this.edits.set(key, id);
       const a1 = key.indexOf(',');
       const a2 = key.indexOf(',', a1 + 1);

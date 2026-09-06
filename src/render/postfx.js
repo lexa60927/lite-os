@@ -24,6 +24,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { glslTypeOf } from './voxelMaterial.js';
 
 const GRADE_FRAG = /* glsl */`
 precision highp float;
@@ -33,6 +34,7 @@ uniform float uUnder;      // камера в воде
 uniform float uDusk;       // 0..1 — закат/рассвет (греет кадр)
 uniform float uNight;      // 0..1 — ночь (холодит и приглушает)
 uniform float uVignette;   // кинематографичная виньетка (настройка)
+/*MOD_DECL*/
 varying vec2 vUv;
 
 void main() {
@@ -57,6 +59,7 @@ void main() {
     float d = length(vUv - 0.5);
     c.rgb *= 1.0 - 0.26 * pow(clamp(d * 1.42, 0.0, 1.0), 2.2);
   }
+  /*MOD_POST*/
   gl_FragColor = vec4(c.rgb, 1.0);
 }
 `;
@@ -70,7 +73,15 @@ void main() {
 `;
 
 export class PostFX {
-  constructor(renderer, scene, camera) {
+  /** Значение униформы мода в пост-проходе (её же правит game.mods.setUniform). */
+  setUniform(name, value) {
+    const u = this.grade?.uniforms?.[name];
+    if (!u) return false;
+    u.value = value;
+    return true;
+  }
+
+  constructor(renderer, scene, camera, mods = {}) {
     this.renderer = renderer;
     this.enabled = false;
     this.ok = false;
@@ -89,6 +100,23 @@ export class PostFX {
       });
       this.composer = new EffectComposer(renderer, rt);
       this.composer.addPass(new RenderPass(scene, camera));
+      // Код мода в грейд-проходе: c уже посчитан (под водой/закат/виньетка — до
+      // вставки), доступны vUv, uTime, uUnder, uDusk, uNight и униформы мода.
+      const posts = Array.isArray(mods.post) ? mods.post : [];
+      const modU = mods.uniforms && typeof mods.uniforms === 'object' ? mods.uniforms : null;
+      // объявления — в MOD_DECL (вне main()), код — в MOD_POST (внутри main(), где уже есть c)
+      const decl = modU ? Object.entries(modU)
+        .map(([n, v]) => [n, glslTypeOf(v)])
+        .filter(([, t]) => t).map(([n, t]) => `uniform ${t} ${n};`).join('\n') : '';
+      const inject = (src, name, text) => {
+        const marker = new RegExp(`[ \\t]*/\\*${name}\\*/[ \\t]*\\n?`);
+        return text ? src.replace(marker, () => `${text.trim()}\n`) : src.replace(marker, '');
+      };
+      let injected = inject(GRADE_FRAG, 'MOD_DECL', decl);
+      injected = inject(injected, 'MOD_POST', posts.length
+        ? posts.map((it) => `{\n    // ——— пост-обработка мода «${it.mod}»\n${it.code}\n  }`).join('\n  ')
+        : '');
+      this.fragSource = injected;   // оба якоря уже разобраны inject(), маркеров оставаться не должно
       this.grade = new ShaderPass({
         uniforms: {
           tDiffuse: { value: null },
@@ -97,9 +125,10 @@ export class PostFX {
           uDusk: { value: 0 },
           uNight: { value: 0 },
           uVignette: { value: 0 },
+          ...(modU ? Object.fromEntries(Object.entries(modU).map(([k, v]) => [k, { value: v }])) : {}),
         },
         vertexShader: GRADE_VERT,
-        fragmentShader: GRADE_FRAG,
+        fragmentShader: this.fragSource,
       });
       this.grade.renderToScreen = true;
       this.composer.addPass(this.grade);

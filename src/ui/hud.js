@@ -571,6 +571,101 @@ export class Hud {
       row.append(...all);
       box.appendChild(row);
     }
+    this.modsSection(box, extra.mods);
+  }
+
+  /**
+   * Секция «Моды и свои шейдеры» внутри настроек. Специального экрана не заводим:
+   * настройки и так открываются паузой, а моды — это тоже настройка.
+   * Список читается через колбэки, чтобы hud не знал про mods.js (и наоборот).
+   */
+  modsSection(box, api) {
+    if (!api) return;
+    const head = document.createElement('div');
+    head.className = 'setting';
+    const title = document.createElement('label');
+    title.textContent = 'Моды и свои шейдеры';
+    const hint = document.createElement('div');
+    hint.style.cssText = 'opacity:.65;font-size:12px;line-height:1.45;margin:2px 0 6px';
+    hint.textContent = 'Файлы из каталога mods/ подхватываются сборкой. Ниже — свой мод одним объектом (секции tiles, blocks, recipes, ore, mobs, shader) и шейдерная вставка в материал мира. Справочник: mods/README.md.';
+    head.append(title, hint);
+    box.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'setting';
+    const items = typeof api.list === 'function' ? api.list() : [];
+    if (!items.length) {
+      const none = document.createElement('div');
+      none.style.cssText = 'opacity:.6;font-size:12px';
+      none.textContent = 'Модов нет: положи файл mods/<имя>.js или напиши свой ниже.';
+      list.appendChild(none);
+    }
+    for (const m of items) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:baseline;margin:3px 0';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !m.off;
+      cb.onchange = () => api.onToggle?.(m.id, cb.checked);
+      const lab = document.createElement('label');
+      lab.style.cssText = 'font-size:13px';
+      const status = m.ok ? (m.off ? 'выключен' : m.applied ? 'применён' : 'без изменений') : (m.error || 'ошибка');
+      lab.textContent = `${m.name} — ${m.source} — ${status}`;
+      if (!m.ok) lab.style.color = '#f0a2a2';
+      row.append(cb, lab);
+      list.appendChild(row);
+    }
+    box.appendChild(list);
+
+    const ta = document.createElement('textarea');
+    ta.value = typeof api.source === 'function' ? api.source() : '';
+    ta.rows = 9;
+    ta.spellcheck = false;
+    ta.placeholder = "{ id: 'moy', name: 'Мой мод', blocks: […], shader: { frag: 'col.rgb *= 1.1;' } }";
+    ta.style.cssText = 'width:100%;box-sizing:border-box;background:#0d1117;color:#d6e4f0;border:1px solid #2b3a4a;border-radius:6px;padding:8px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre';
+    box.appendChild(ta);
+
+    const row2 = document.createElement('div');
+    row2.className = 'row buttons';
+    const save = document.createElement('button');
+    save.className = 'btn ghost';
+    save.textContent = 'Сохранить мод';
+    save.onclick = () => api.onSave?.(ta.value);
+    const shaders = document.createElement('button');
+    shaders.className = 'btn ghost';
+    shaders.textContent = 'Применить шейдеры сейчас';
+    shaders.title = 'Работает, если мод трогает только shader: материал пересобирается на живых мешах. Блоки и текстуры требуют F5.';
+    shaders.onclick = () => api.onApplyShaders?.();
+    const reset = document.createElement('button');
+    reset.className = 'btn ghost';
+    reset.textContent = 'Сбросить поле';
+    reset.onclick = () => { ta.value = typeof api.source === 'function' ? api.source() : ''; };
+    row2.append(save, shaders, reset);
+    box.appendChild(row2);
+
+    // Живые ручки для униформ мода: править шейдер, не перезапускаясь, — то, ради
+    // чего их вообще стоит давать.
+    const names = typeof api.uniforms === 'function' ? api.uniforms() : [];
+    for (const name of names) {
+      const row = document.createElement('div');
+      row.className = 'setting';
+      const lab = document.createElement('label');
+      lab.textContent = `${name} (мод)`;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = '0'; input.max = '1'; input.step = '0.01'; input.value = '0.5';
+      input.oninput = () => api.onSetUniform?.(name, +input.value);
+      lab.append(input, document.createTextNode(` ${input.value}`));
+      row.appendChild(lab);
+      box.appendChild(row);
+    }
+
+    if (typeof api.stats === 'function') {
+      const st = document.createElement('div');
+      st.style.cssText = 'opacity:.6;font-size:12px;margin-top:4px';
+      st.textContent = 'Активно: ' + api.stats();
+      box.appendChild(st);
+    }
   }
 
   // -------------------------------------------------------- инвентарь

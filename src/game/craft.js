@@ -52,6 +52,32 @@ export const RECIPES_CLEAN = RECIPES.filter((r) => {
   need: r.need.map(([key, count]) => ({ id: byKey(key), n: count })),
 }));
 
+/**
+ * Рецепты модов: та же нормализация, что у RECIPES_CLEAN (ключ → id). Иначе
+ * рецепт с неизвестным ключом выглядел бы доступным, но собрать его было бы
+ * нельзя — а такое в настройках мода легко опечататься.
+ * Возвращает [{ src, clean }], чтобы mods.js мог откатить ровно свои записи.
+ */
+export function addRecipes(defs, mod = null) {
+  const made = [];
+  for (const r of defs || []) {
+    if (!r || !r.out || !Array.isArray(r.need) || !r.need.length) continue;
+    const src = { ...r, mod };
+    const clean = {
+      outId: byKey(r.out),
+      n: Math.max(1, r.n | 0 || 1),
+      table: !!r.table,
+      name: r.name,
+      mod,
+      need: r.need.map(([key, count]) => ({ id: byKey(key), n: Math.max(1, count | 0 || 1) })),
+    };
+    RECIPES.push(src);
+    RECIPES_CLEAN.push(clean);
+    made.push({ src, clean });
+  }
+  return made;
+}
+
 /** Можно ли собрать рецепт: инвентарь — объект с count(id). nearTable — верстак рядом. */
 export function canCraft(recipe, inv, nearTable) {
   if (recipe.table && !nearTable) return false;

@@ -632,6 +632,27 @@ painters.item_shears = (tl) => {
 
 export const TILE_NAMES = Object.keys(painters).filter((n) => painters[n]);
 
+/**
+ * Регистрация тайла модом. Атлас строится один раз (buildTiles inside new Atlas),
+ * поэтому моды применяют тайлы ДО создания игры — main.js так и делает.
+ * paint = null снимает тайл (откат в тестах); индексы атласа при этом сдвигаются,
+ * но меши чанков строятся по имени тайла, а не по индексу, так что перестройка
+ * чанков (rebuildAll / новая загрузка) возвращает порядок.
+ */
+export function registerTilePainter(name, paint) {
+  const key = String(name);
+  const at = TILE_NAMES.indexOf(key);
+  if (!paint) {
+    if (at >= 0) TILE_NAMES.splice(at, 1);
+    delete painters[key];
+    return false;
+  }
+  if (typeof paint !== 'function') throw new Error(`тайл «${key}»: painter должен быть функцией`);
+  painters[key] = paint;
+  if (at < 0) TILE_NAMES.push(key);
+  return true;
+}
+
 /** name → index в атласе; тайл → PixelTile */
 export function buildTiles() {
   const tiles = [];

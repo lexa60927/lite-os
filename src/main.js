@@ -8,6 +8,14 @@ import { createRenderer } from './render/renderer.js';
 
 import { Atlas } from './render/atlas.js';
 import { createVoxelMaterials } from './render/voxelMaterial.js';
+// Мод-система: loadMods() обязан отработать ДО new Game(), потому что атлас
+// строится один раз в конструкторе и берёт тайлы из tiles.js (см. game/mods.js).
+import {
+  loadMods, shaderChunks as modShaderChunks, hasOre, orePass, modOf, modBlockIds,
+  register as modRegister, normId as normModId,
+  snapshot as modSnapshot, saveUserSource, readUserSource, setModEnabled,
+  parseSource as parseModSource, setUniform as modSetUniform,
+} from './game/mods.js';
 import { Sky } from './render/sky.js';
 import { ChunkView } from './render/chunkView.js';
 import { Particles } from './render/particles.js';
@@ -58,7 +66,7 @@ export class Game {
     try {
       this.atlasAniso = this.atlas.setMaxAnisotropy(this.renderer.capabilities?.getMaxAnisotropy?.() ?? 1);
     } catch { this.atlasAniso = 1; }
-    this.materials = createVoxelMaterials(this.atlas);
+    this.materials = createVoxelMaterials(this.atlas, modShaderChunks());
     this.sky = new Sky(this.scene);
     // Тени: один directional light с ortho-камерой, следящей за игроком. Сам по
     // себе он ничего не красит (освещённость считает шейдер), только пишет карту.
@@ -191,6 +199,43 @@ export class Game {
   openSettings(from) {
     this.hud.settingsForm(this.settings, (key, value) => this.applySettings(key, value), {
       onRegenerate: () => { if (this.state.world) { this.state.world.rebuildAll?.(); this.chunkView?.rebuildAll(); } },
+      // Панель «Моды»: список с выключением, редактор своего мода и применение
+      // шейдеров на живом материале (без перезагрузки — только для чистых шейдеров).
+      mods: {
+        list: () => modSnapshot().mods,
+        stats: () => {
+          const snap = modSnapshot();
+          return `блоков +${snap.blockIds.length}, тайлов +${snap.tiles.length}, руд ${snap.oreCount}, шейдеров: ${snap.shaderNames.join(', ') || 'нет'}`;
+        },
+        source: () => readUserSource(),
+        onToggle: (id, on) => {
+          setModEnabled(id, on);
+          this.hud.toast('Запомнил. Мод применится после перезагрузки страницы (F5)', 'warn');
+        },
+        onSave: (src) => {
+          const text = String(src || '');
+          if (text.trim()) {
+            const parsed = parseModSource(text);
+            if (parsed.error) { this.hud.toast('Не сохранил: ' + parsed.error, 'warn'); return false; }
+            const rec = { id: String(parsed.def.id || 'user').toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'user' };
+            saveUserSource(text);
+            this.hud.toast(`Мод «${rec.id}» сохранён. Обнови страницу (F5), чтобы он применился`, 'ok');
+            return true;
+          }
+          saveUserSource('');
+          this.hud.toast('Свой мод удалён. Обнови страницу (F5)', 'ok');
+          return true;
+        },
+        uniforms: () => modSnapshot().uniforms,
+        onApplyShaders: () => this.applyModShaders(),
+        onSetUniform: (name, value) => {
+          if (!/^u[A-Z][A-Za-z0-9_]*$/.test(String(name || ''))) return false;
+          const ok = modSetUniform(String(name), Number(value), this.materials);
+          this.post?.setUniform?.(String(name), Number(value));
+          if (ok) this.hud.toast(`${name} = ${value}`, 'ok');
+          return ok;
+        },
+      },
       onLowSpec: () => {
         // Один клик для встроенного GPU и 4–8 ГБ памяти. Умышленно НЕ трогаем
         // renderDistance: запрос был «10 чанков и больше должны работать»,
@@ -576,6 +621,9 @@ export class Game {
     const seed = (typeof seedRaw === 'string' || typeof seedRaw === 'number') && !Number.isNaN(Number(seedRaw)) ? Number(seedRaw) >>> 0 : seedFromString(String(seedRaw));
     saveLastSeed(seed);
     const world = new World(seed);
+    // Свои руды из модов — пост-проход генерации. Если модов с рудами нет,
+    // поле не выставляется вовсе: генерация остаётся ровно прежней дорогой.
+    if (hasOre()) world.modPass = orePass;
     const save = loadWorld(seed);
     if (save?.edits) world.loadEdits(save.edits);
     this.state.world = world;
@@ -802,7 +850,7 @@ export class Game {
     this.state.sel = n;
     this.hud.selectSlot(n);
     this.viewModel.setBlock(this.inv.hot[n]);
-    this.hud.showBlockName(this.inv.hot[n], this.handInfo(this.inv.hot[n]));
+    this.hud.showBlockName(this.inv.hot[n], this.handInfo(this.inv.hot[n]) + this.modTag(this.inv.hot[n]));
     this.state.breakProgress = 0;
     this.target.setBreakProgress(0);
   }
@@ -1104,7 +1152,7 @@ export class Game {
     this.hud.buildHotbar(this.state.hotbar, this.state.sel, this.hud.onHotbarChange);
     this.hud.selectSlot(this.state.sel);
     this.viewModel.setBlock(id);
-    this.hud.showBlockName(id);
+    this.hud.showBlockName(id, this.modTag(id));
     this.audio.ui('click');
   }
 
@@ -1354,7 +1402,7 @@ export class Game {
   initPost() {
     if (this.post) { this.post.setEnabled(this.settings.shaders >= 3); return; }
     try {
-      const fx = new PostFX(this.renderer, this.scene, this.camera);
+      const fx = new PostFX(this.renderer, this.scene, this.camera, modShaderChunks());
       if (!fx.ok) {
         this.post = null;
         this.hud.toast('Постобработка недоступна на этом железе — играем без теней и отражений', 'warn');
@@ -1366,6 +1414,45 @@ export class Game {
     } catch {
       this.post = null;      // отказ не должен мешать играть: frame() смотрит active, а не факт создания
     }
+  }
+
+  /**
+   * Применить моды, которые меняли только шейдеры: пересобрать материал и
+   * пост-проход на живых мешах. Если мод добавил блоки/тайлы — честно отказываем:
+   * id блоков уже живут в сохранённом мире, а атлас строится один раз, такое
+   * применяется только перезагрузкой (кнопка в панели «Моды»).
+   */
+  applyModShaders() {
+    const snap = modSnapshot();
+    if (snap.blockIds.length || snap.tiles.length) {
+      this.hud.toast('Мод меняет блоки или текстуры — нужна перезагрузка страницы (F5)', 'warn');
+      return false;
+    }
+    const mats = createVoxelMaterials(this.atlas, modShaderChunks());
+    this.materials.solid.dispose();
+    this.materials.water.dispose();
+    this.materials = mats;
+    const swapped = this.chunkView?.setMaterials?.(mats) ?? 0;
+    if (this.post) { this.post.dispose?.(); this.post = null; }
+    this.initPost();
+    this.hud.toast(`Шейдеры модов применены: ${swapped} мешей, ${snap.shaderNames.length ? snap.shaderNames.join(', ') : 'без мода'}`, 'ok');
+    return true;
+  }
+
+  /** Зарегистрировать мод прямо из консоли (отладка). Не заменяет перезагрузку,
+   * если мод добавляет блоки: атлас и id уже розданы. */
+  registerMod(def, id = String(def?.id || 'console')) {
+    const rec = modRegister(normModId(id), def, 'консоль');
+    this.hud.toast(rec.ok ? `Мод «${rec.name}» применён${rec.applied?.blocks?.length ? ' — для блоков нужна перезагрузка' : ''}` : `Мод не принят: ${rec.error}`, rec.ok ? 'ok' : 'warn');
+    if (rec.ok && !rec.applied?.blocks?.length && !rec.applied?.tiles?.length) this.applyModShaders();
+    return rec;
+  }
+
+  /** «· мод ruby» в подсказке под хотбаром: чужой блок должно быть видно. */
+  modTag(id) {
+    const key = BLOCKS[id]?.key;
+    const m = key ? modOf(key) : null;
+    return m ? ` · мод ${m}` : '';
   }
 
   resize() {
@@ -1531,6 +1618,10 @@ export class Game {
     } else if (u.uShadow.value !== 0) {
       u.uShadow.value = 0;
     }
+    // Часы суток для модов: uDay/uDusk/uNight — то, чем обычно пишут «ночью иначе»
+    u.uDay.value = sky.day;
+    u.uDusk.value = sky.dusk ?? 0;
+    u.uNight.value = 1 - sky.day;
     const far = this.settings.renderDistance * CHUNK;
     const under = this.player.headInWater;
     if (under) {
@@ -1652,8 +1743,28 @@ export class Game {
 
 
 export function boot(deps = {}) {
+  // Моды раньше игры: тайлы → блоки → рецепты → шейдеры (см. game/mods.js).
+  // Ошибки мода не имеют права остановить запуск — loadMods их собирает в список.
+  try {
+    loadMods();
+  } catch (e) {
+    console.warn('Моды не загрузились:', e);
+  }
   const game = new Game(deps);
   window.game = game;
+  // Ручки для отладки модов из консоли: game.mods.snapshot(), setUniform('uRuby', .8),
+  // register({...}) — применить мод на лету, не трогая файлы.
+  game.mods = {
+    snapshot: () => modSnapshot(),
+    blockIds: () => modBlockIds(),
+    setUniform: (name, value) => {
+      const ok = modSetUniform(String(name), Number(value), game.materials);
+      game.post?.setUniform?.(String(name), Number(value));
+      return ok;
+    },
+    applyShaders: () => game.applyModShaders(),
+    register: (def) => game.registerMod(def),
+  };
   window.addEventListener('beforeunload', () => {
     if (game.state?.world && game.state.running) game.save();
   });

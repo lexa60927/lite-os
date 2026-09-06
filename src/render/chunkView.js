@@ -258,6 +258,20 @@ export class ChunkView {
     this.stats.quads = (data.solid?.quads ?? 0) + (data.water?.quads ?? 0);
   }
 
+  /**
+   * Перепривязать материалы на живых мешах (моды со своим шейдером). Геометрия
+   * не меняется, поэтому пересборки чанков не нужно: материал влияет только на то,
+   * как грань рисуется, а не на то, где она лежит.
+   */
+  setMaterials(materials) {
+    this.materials = materials;
+    for (const obj of this.objects.values()) {
+      if (obj.solid) obj.solid.material = materials.solid;
+      if (obj.water) obj.water.material = materials.water;
+    }
+    return this.objects.size;
+  }
+
   applyMesh(mesh, data, material, cx, cz) {
     if (!data) {
       if (mesh) { this.scene.remove(mesh); mesh.geometry.dispose(); }
