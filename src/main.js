@@ -14,7 +14,7 @@ import { Particles } from './render/particles.js';
 import { ViewModel, BlockTarget } from './render/viewmodel.js';
 
 import { World } from './engine/world.js';
-import { AIR, BLOCKS, byKey, damageOf, dropOf, isItem, mineMultiplier } from './engine/blocks.js';
+import { AIR, BLOCKS, byKey, bonusDropOf, damageOf, dropOf, isItem, mineMultiplier } from './engine/blocks.js';
 import { CHUNK, HEIGHT, blockKey } from './engine/constants.js';
 import { DEFAULT_SEED } from './engine/gen.js';
 import { seedFromString } from './engine/noise.js';
@@ -33,6 +33,9 @@ import { Mobs } from './game/mobs.js';
 import { NetSession, cleanRoom, MAX_PLAYERS } from './game/net.js';
 import { wsTransport, rtcTransport, defaultRelayUrl } from './game/netTransport.js';
 import { PeerAvatars } from './render/avatars.js';
+import { PostFX } from './render/postfx.js';
+import { SunShadow } from './render/sunShadow.js';
+import { WaterProbe } from './render/waterProbe.js';
 
 const HOTBAR_DEFAULT = ['grass', 'dirt', 'stone', 'cobblestone', 'planks', 'log', 'glass', 'torch', 'glowstone'];
 const FIXED = 1 / 60;
@@ -57,6 +60,15 @@ export class Game {
     } catch { this.atlasAniso = 1; }
     this.materials = createVoxelMaterials(this.atlas);
     this.sky = new Sky(this.scene);
+    // Тени: один directional light с ortho-камерой, следящей за игроком. Сам по
+    // себе он ничего не красит (освещённость считает шейдер), только пишет карту.
+    this.sunShadow = new SunShadow(this.scene);
+    // Страховка на «подставной» renderer (тесты, headless): у фейка может не быть
+    // shadowMap, а игра из-за этого вставать не обязана.
+    if (this.renderer.shadowMap) {
+      this.renderer.shadowMap.enabled = false;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    }
     this.particles = new Particles(this.scene);
     this.target = new BlockTarget(this.atlas);
     this.scene.add(this.target.group);
@@ -116,7 +128,7 @@ export class Game {
     this.bindNet();
     this.bindInput();
     this.resize();
-    addEventListener('resize', () => this.resize());
+    addEventListener('resize', () => { this.resize(); this.post?.setSize(); });
     this.hud.show('menu');
     this.refreshWorlds();
     this.bindModeSeg();
@@ -215,7 +227,13 @@ export class Game {
     // «шейдеры» — одна униформа, поэтому перестройка чанков не нужна: картинка
     // меняется мгновенно, без перерасхода на меш
     this.materials?.setQuality?.(s.shaders);
-    this.hud?.setCinematic?.(s.shaders >= 2);
+    // «Ультра» = уровень 3: свои ветки в шейдерах неба/воды + постобработка
+    this.sky?.setUltra?.(s.shaders >= 3);
+    if (this.post) this.post.setEnabled(s.shaders >= 3);
+    else if (s.shaders >= 3) this.initPost();
+    this.applyLighting(s);
+    // Виньетку рисует кто-то один: либо CSS-маска, либо финальный грейд.
+    this.hud?.setCinematic?.(s.shaders >= 2 && !this.post?.active);
     if (this.chunkView) this.chunkView.setRenderDistance(s.renderDistance);
     if (this.audio.ready) this.audio.setVolumes(s.sfx, s.music);
     this.audio.musicVolume = s.music;
@@ -568,6 +586,8 @@ export class Game {
     this.player = new Player(world);
     const spawn = save?.spawn ?? world.findSpawn();
     this.player.spawn(spawn[0], spawn[1], spawn[2]);
+    // «дом» для компаса: именно первая точка спавна, а не последняя позиция
+    this.state.worldSpawn = Array.isArray(save?.worldSpawn) ? [save.worldSpawn[0], save.worldSpawn[1]] : [spawn[0], spawn[2]];
     if (save?.yaw !== undefined) { this.player.yaw = save.yaw; this.player.pitch = save.pitch; }
     if (save?.hp !== undefined) this.state.hp = save.hp;
     this.mobs.world = world;
@@ -577,6 +597,7 @@ export class Game {
     this.chunkView?.dispose();
     this.chunkView = new ChunkView(world, this.scene, this.materials, this.atlas);
     this.chunkView.setRenderDistance(this.settings.renderDistance);
+    this.applyLighting();   // меши нового мира должны унаследовать режим теней/отражений
     this.setupInventory(!!save ? save.creative : undefined, save?.inv ?? save?.hotbar);
     this.syncHotbar();
     this.hud.setHealth(this.state.hp);
@@ -781,7 +802,7 @@ export class Game {
     this.state.sel = n;
     this.hud.selectSlot(n);
     this.viewModel.setBlock(this.inv.hot[n]);
-    this.hud.showBlockName(this.inv.hot[n]);
+    this.hud.showBlockName(this.inv.hot[n], this.handInfo(this.inv.hot[n]));
     this.state.breakProgress = 0;
     this.target.setBreakProgress(0);
   }
@@ -807,6 +828,7 @@ export class Game {
     this.menuMode = on ? 'creative' : 'survival';
     this.syncModeSeg();
     this.hud.setFlyAvailable(this.inv.creative);
+    this.hud.setHealthVisible(!on);
     // режим мира — настройка: после перезагрузки страницы он должен остаться
     this.settings.creative = !!on;
     saveSettings(this.settings);
@@ -834,6 +856,7 @@ export class Game {
     this.inv.sel = Math.max(0, Math.min(8, this.inv.sel));
     this.state.creative = creative;
     this.hud.setFlyAvailable(creative);
+    this.hud.setHealthVisible(!creative);   // в творчестве сердец нет: мы бессмертны
   }
 
   /** Выдать предмет (сбор, крафт, дроп). */
@@ -1085,9 +1108,60 @@ export class Game {
     this.audio.ui('click');
   }
 
+  /**
+   * Что выпадает из блока. Бонус (кремень из гравия, яблоко из листвы) считает
+   * world-слой по координатам, а не random: тогда сосед по сети, видящий тот же
+   * чанк, получит ровно то же самое — и инвентари не разъедутся.
+   */
+  dropFor(hit) {
+    return bonusDropOf(hit.id, hit.x, hit.y, hit.z) || dropOf(hit.id);
+  }
+
+  /** Съесть то, что в руке (еда). В творчестве не нужно и не расходуется. */
+  eat(def) {
+    const st = this.state;
+    if (this.inv.creative) { this.hud.toast('В творчестве есть не нужно — здоровье и так полное', ''); return false; }
+    if (st.hp >= 20) { this.hud.toast('Ты сыт: здоровье полное', ''); return false; }
+    st.placeCd = 0.9;                       // одно нажатие — одна еда, а не весь стек за секунду
+    const held = this.inv.hot[this.inv.sel];
+    this.inv.set('hot', this.inv.sel, held, Math.max(0, this.inv.n('hot', this.inv.sel) - 1));
+    this.syncHotbar();
+    st.hp = Math.min(20, st.hp + (def.food | 0));
+    this.hud.setHealth(st.hp);
+    this.audio.step('grass');
+    this.hud.toast(`Съедено ${def.name.toLowerCase()} · +${(def.food / 2).toFixed(def.food % 2 ? '1' : '0')} сердца`, '');
+    this.scheduleSave();
+    return true;
+  }
+
+  /** Показание компаса/часов: читаем в подписи предмета и в панели F3. */
+  handInfo(id) {
+    const def = BLOCKS[id];
+    if (!def?.info) return '';
+    if (def.info === 'time') {
+      const t = ((this.state.time ?? 0.25) + 0.25) % 1;      // 0.25 = полдень → 12:00
+      const mins = Math.floor(t * 24 * 60);
+      const hh = String(Math.floor(mins / 60)).padStart(2, '0');
+      const mm = String(mins % 60).padStart(2, '0');
+      return ` · ${hh}:${mm} по миру`;
+    }
+    const sp = this.state.worldSpawn;
+    if (!sp) return '';
+    const dx = sp[0] - this.player.x, dz = sp[1] - this.player.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1.5) return ' · ты на спавне';
+    const ang = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;   // 0° = север (-Z)
+    const rose = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'][Math.round(ang / 45) % 8];
+    return ` · спавн ${dist.toFixed(0)} бл, ${rose} (${ang.toFixed(0)}°)`;
+  }
+
   tryPlace() {
     const hit = this.state.lastHit;
     const st = this.state;
+    // Еда в руке — это «съесть», а не «поставить»: проверяем до всего остального,
+    // иначе яблоко получило бы «предмет, его не поставить».
+    const heldDef = BLOCKS[this.inv.hot[this.inv.sel]];
+    if (heldDef?.food) { this.eat(heldDef); return; }
     if (!hit) return;
     const id = this.inv.hot[this.inv.sel];
     if (!id) { this.audio.deny(); this.hud.toast('Пустой слот — E открывает инвентарь', 'warn'); return; }
@@ -1163,7 +1237,10 @@ export class Game {
       this.hud.setMining(false);
       world.setBlock(hit.x, hit.y, hit.z, AIR);
       this.netBroadcast(hit.x, hit.y, hit.z, AIR);
-      if (!this.inv.creative) this.pickup(dropOf(hit.id), 1);
+      if (!this.inv.creative) {
+        const dropId = this.dropFor(hit);
+        if (dropId) this.pickup(dropId, 1);
+      }
       this.audio.breakBlock(def.sound);
       const tint = this.blockTint.get(hit.id) ?? [0.7, 0.7, 0.7];
       this.particles.burst(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 14, tint, { speed: 3.4, life: 0.8, spread: 0.8 });
@@ -1182,6 +1259,7 @@ export class Game {
       seed: this.state.seed,
       saved: Date.now(),
       spawn: [this.player.x, this.player.y, this.player.z],
+      worldSpawn: this.state.worldSpawn ?? null,
       yaw: this.player.yaw, pitch: this.player.pitch,
       time: this.state.time,
       hotbar: this.inv.hot.slice(),
@@ -1214,16 +1292,106 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2) * rs);
   }
 
+  /**
+   * Постобработка «Ультра» создаётся лениво: пока третий уровень не выбран,
+   * лишние HDR-буферы и проходы не едят память. Повторный вызов безопасен.
+   */
+  /**
+   * Что из «красивого» реально включено. Разложено по уровням честно:
+   * тени работают начиная с «Красивых» (это один дополнительный проход в
+   * маленькую карту), куб-проба отражений — только в «Ультре» (шесть рендеров).
+   * При выключении всё возвращается к прежней картинке: uShadow = 0, а без
+   * renderer.shadowMap.enabled three вообще не компилирует ветку USE_SHADOWMAP.
+   */
+  applyLighting(s = this.settings) {
+    const ultra = (s.shaders | 0) >= 3;
+    const shadowOn = (s.shaders | 0) >= 2 && (s.shadows | 0) > 0;
+    const radius = (s.shadows | 0) >= 2 ? 96 : 64;
+    if (this.renderer.shadowMap) this.renderer.shadowMap.enabled = shadowOn;
+    this.sunShadow?.setEnabled(shadowOn, radius);
+    // сила тени: днём плотная, на закате мягче, ночью не нужна вовсе
+    this.materials.setShadow(shadowOn ? (ultra ? 0.92 : 0.8) : 0);
+    this.sunShadow?.setSoftness(ultra ? 2 : 1);
+    this.chunkView?.setShadows(shadowOn, shadowOn ? this.shadowDepthMaterial() : null);
+    this._shadowBase = shadowOn ? (ultra ? 0.92 : 0.8) : 0;
+    this.materials.uniforms.uShadow.value = 0;   // значение на кадр пересчитает step()
+
+    const refl = ultra && (s.waterRefl | 0) >= 2;
+    if (refl && !this.probe) {
+      try {
+        this.probe = new WaterProbe(this.renderer, this.scene, { size: 128, far: 200, every: 12 });
+      } catch { this.probe = null; }
+      if (this.probe && !this.probe.ok) this.probe = null;
+    }
+    if (this.probe) {
+      this.probe.setEnabled(refl);
+      this.materials.setReflection(refl ? this.probe.texture : null, refl ? 0.85 : 0);
+    } else {
+      this.materials.setReflection(null, 0);
+    }
+    // отражения «включены» только пока проба жива: она может отказать уже в
+    // полёте (потеря контекста), а вода без текстуры отражать не должна
+    this._reflOn = refl && !!this.probe;
+    return { shadowOn, ultra, refl: !!refl };
+  }
+
+  /**
+   * Материал глубины для карты теней: тот же атлас и alpha-test, чтобы листва,
+   * трава и факелы отбрасывали «дырявую» тень, а не прямоугольник.
+   */
+  shadowDepthMaterial() {
+    if (!this._depthMat) {
+      this._depthMat = new THREE.MeshDepthMaterial({
+        depthPacking: THREE.RGBADepthPacking,
+        map: this.atlas.texture,
+        alphaTest: 0.5,
+        side: THREE.FrontSide,
+      });
+    }
+    return this._depthMat;
+  }
+
+  initPost() {
+    if (this.post) { this.post.setEnabled(this.settings.shaders >= 3); return; }
+    try {
+      const fx = new PostFX(this.renderer, this.scene, this.camera);
+      if (!fx.ok) {
+        this.post = null;
+        this.hud.toast('Постобработка недоступна на этом железе — играем без теней и отражений', 'warn');
+        return;
+      }
+      fx.setEnabled(this.settings.shaders >= 3);
+      fx.setSize();
+      this.post = fx;
+    } catch {
+      this.post = null;      // отказ не должен мешать играть: frame() смотрит active, а не факт создания
+    }
+  }
+
   resize() {
     const w = innerWidth, h = innerHeight;
     this.renderer.setSize(w, h, false);
     this.applyPixelRatio();
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    this.post?.setSize();
   }
 
   frame(now) {
     requestAnimationFrame((t) => this.frame(t));
+    // Ограничитель кадров (настройка «Лимит FPS», по умолчанию 120). Кадры не
+    // копятся в очереди, а просто пропускаются: this.lastFrame не обновляется,
+    // поэтому физика на фиксированном шаге догоняет сама, а FPS меряет ровно
+    // частоту вывода. 0 — без лимита. Запас в 1.2 мс — на джиттер вертикалки:
+    // без него лимит 60 на 60-Гц мониторе резал бы каждый второй кадр.
+    const lim = this.settings.fpsLimit | 0;
+    if (lim > 0) {
+      if (this._nextDraw === undefined) this._nextDraw = 0;
+      if (now < this._nextDraw) return;
+      this._nextDraw = now + 1000 / Math.max(1, lim) - 1.2;
+    } else {
+      this._nextDraw = 0;
+    }
     // rAF-время может прыгнуть (фоновая вкладка, подставные часы) — защищаемся
     const raw = (now - (this.lastFrame ?? now)) / 1000;
     const dt = Number.isFinite(raw) ? Math.max(0, Math.min(0.1, raw)) : 1 / 60;
@@ -1241,7 +1409,24 @@ export class Game {
     // иначе аватары замирают, а правки перестают расходиться
     if (this.net) this.netFrame(dt);
 
-    this.renderer.render(this.scene, this.camera);
+    // «Ультра» гоняет кадр через финальный грейд (дымка, виньетка, подводный
+    // цвет); всё остальное — напрямую, как было (PostFX сам отключается при сбое).
+    // Куб-проба отражений: после основного кадра (карта теней к этому моменту
+    // уже обновлена) и только когда игрок/мир сдвинулись либо пришёл черёд.
+    if (this.probe?.enabled && this.camera) {
+      this.probe.update(this.camera.position, this.chunkView?.chunkMeshCount ?? 0, this.chunkView?.waterMeshes ?? []);
+    } else if (this.probe && this._reflOn) {
+      this._reflOn = false;
+      this.materials.setReflection(null, 0);
+    }
+    if (this.post?.active) {
+      this.post.render(dt, {
+        under: !!this.player?.headInWater,
+        dusk: this.sky?.dusk ?? 0,
+        night: 1 - (this.sky?.day ?? 1),
+        vignette: this.settings.shaders >= 2 && !this.inventoryOpen,
+      });
+    } else this.renderer.render(this.scene, this.camera);
     this.state.ms = this.state.ms * 0.9 + (performance.now() - t0) * 0.1;
   }
 
@@ -1337,6 +1522,15 @@ export class Game {
     else if (mv.count) mv.clear();
     const u = this.materials.uniforms;
     u.uTime.value += dt;
+    // Тени следят за игроком (объём карты теней ходит вместе с ним) и за солнцем.
+    // Сила привязана к освещённости: на закате тень мягчает и гаснет, ночью её нет.
+    if (this.sunShadow?.enabled) {
+      const moved = this.sunShadow.update(cam.position, this.sky.uniforms.uSunDir.value, sky.day, this.chunkView?.chunkMeshCount ?? 0);
+      if (moved) this._shadowFrames = (this._shadowFrames ?? 0) + 1;
+      u.uShadow.value = (this._shadowBase ?? 0.9) * Math.max(0, Math.min(1, sky.day * 1.5 - 0.05));
+    } else if (u.uShadow.value !== 0) {
+      u.uShadow.value = 0;
+    }
     const far = this.settings.renderDistance * CHUNK;
     const under = this.player.headInWater;
     if (under) {
@@ -1352,7 +1546,8 @@ export class Game {
       u.uFogColor.value.setRGB(0.09 * (0.35 + sky.day), 0.26 * (0.35 + sky.day), 0.42 * (0.35 + sky.day));
     }
     this.renderer.setClearColor(sky.fogColor, 1);
-    this.hud.setWater(under);
+    // подводный цвет тоже один источник: в «ультре» его делает постобработка
+    this.hud.setWater(!!under && !this.post?.active);
     this.camera.near = under ? 0.05 : 0.08;
     this.camera.updateProjectionMatrix();
 
@@ -1440,12 +1635,13 @@ export class Game {
     const mins = Math.floor((((this.state.time * 24 + 6) % 24) % 1) * 60);
     const cv = this.chunkView;
     this.hud.setDebug([
-      `LiteCraft · ${this.state.fps.toFixed(0)} FPS · ${this.state.ms.toFixed(1)} мс`,
+      `LiteCraft · ${this.state.fps.toFixed(0)} FPS${this.settings.fpsLimit > 0 ? ` (лимит ${this.settings.fpsLimit})` : ' (лимит выключен)'} · ${this.state.ms.toFixed(1)} мс · шейдеры: ${['базовые', 'мягкие', 'красивые', 'ультра'][Math.max(0, Math.min(3, this.settings.shaders | 0))]}${this.post?.active ? ' · грейд' : ''}`,
       `XYZ ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}  чанк ${cx},${cz}  блок ${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`,
       `биом: ${biome}  ·  время ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}  ·  свет ${(sky.day * 15) | 0}/15`,
       `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount} · стриминг ${cv?.stats.ms?.toFixed(1) ?? 0} мс/кадр (${cv?.stats.frameMs?.toFixed(1) ?? '—'} мс кадр)${(() => { const d = cv?.streamDebug?.(); return d && (d.genErr || d.meshErr || d.light > 64) ? ` · сбой: ген ${d.genErr}, меш ${d.meshErr}, свет ${d.light}` : ''; })()}${this.inVillage ? ' · деревня' : ''}`,
       `сеть: ${this.net ? `${this.netKind === 'p2p' ? 'напрямую' : 'через реле'}, игроков ${this.net.peers.size + 1}/${MAX_PLAYERS}, правок ${this.net.edits}` : 'одиночная игра'} · ` +
       `режим: ${p.flying ? 'полёт' : p.sprinting ? 'бег' : 'ходок'} · HP ${this.state.hp / 2} · ${this.inv.creative ? 'творчество' : 'выживание'} · сид ${this.state.seed}`,
+      `${(() => { const info = this.handInfo(this.inv.hot[this.inv.sel]); return info ? `в руке: ${BLOCKS[this.inv.hot[this.inv.sel]]?.name}${info}` : ''; })()}`,
       `мобов вокруг: ${this.mobs.count} (видно ${this.mobs.nearCount(p, 48)}) · убито: ${this.mobs.kills} · в руке: ${BLOCKS[this.inv.hot[this.inv.sel]]?.name ?? '—'} ×${this.inv.creative ? '∞' : this.inv.hotN[this.inv.sel]}`,
       `${p.headInWater ? 'под водой' : p.inWater ? 'в воде' : 'на суше'}${p.onGround ? ' · на земле' : ''} · E — инвентарь, F3 — вкл/выкл панели`,
     ].join('\n'));

@@ -493,6 +493,143 @@ painters.mob_villager_face = (tl) => {
   return tl;
 };
 
+// ——— 0.3.0: замшелый булыжник, лёд, фонарь и новые предметы ———
+// Техника та же, что у остальных тайлов: детерминированный шум (hash2), Никаких
+// Math.random — атлас должен собраться пиксель в пиксель на любом железе.
+painters.mossy_cobblestone = (tl) => {
+  painters.cobblestone(tl);
+  tl.blobs('#3d7a2a', 12, 331, 2.7);
+  tl.blobs('#4f9433', 9, 332, 1.9);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      if (tl.get(x, y)[1] > 120 && hash2(x, y, 333) > 0.82) tl.set(x, y, '#2f6a24');   // мхи забиваются в швы
+    }
+  }
+  return tl.grain(3, 334);
+};
+painters.ice = (tl) => {
+  tl.fill('#a6d3ec');
+  tl.soft(['#bcdff4', '#a9d6ef', '#cbe9f8', '#96c8e6'], 241, 6, 4);
+  for (let i = 0; i < 24; i++) {                              // трещины света
+    const x0 = (hash2(i, 3, 242) * 12) | 0, y0 = (hash2(i, 7, 243) * 12) | 0;
+    const len = 3 + ((hash2(i, 11, 244) * 5) | 0);
+    const dir = hash2(i, 13, 245) > 0.5 ? 1 : -1;
+    for (let k = 0; k < len; k++) tl.set(Math.min(15, x0 + k), Math.min(15, y0 + k * dir), '#e8f7ff', 235);
+  }
+  tl.border('#c9e6f6');
+  return tl.grain(2, 246);
+};
+painters.lantern = (tl) => {
+  tl.clear();
+  tl.rect(6, 0, 4, 1, '#5d5d64');                             // дужка
+  tl.rect(7, 1, 2, 1, '#494950');
+  tl.rect(4, 2, 8, 1, '#565660');                             // верхняя крышка
+  tl.rect(3, 3, 10, 1, '#3f3f47');
+  tl.rect(4, 4, 8, 8, '#2f2f36');                             // корпус
+  for (let y = 5; y < 11; y++) {
+    for (let x = 5; x < 11; x++) {                            // стекло с пламенем
+      const d = Math.hypot(x - 7.5, y - 8);
+      tl.set(x, y, d < 1.6 ? '#fff6c8' : d < 3 ? '#ffd167' : '#e8973a');
+    }
+  }
+  tl.rect(3, 12, 10, 1, '#3f3f47');
+  tl.rect(4, 13, 8, 1, '#565660');
+  for (let y = 5; y < 11; y += 2) { tl.set(4, y, '#6b6b76'); tl.set(11, y, '#6b6b76'); }   // заклёпки
+  return tl;
+};
+painters.item_flint = (tl) => {
+  tl.clear();
+  for (let y = 3; y < 14; y++) {
+    const w = 1 + Math.round(5 * Math.sin((y - 2) * 0.55));
+    const x0 = 3 + ((hash2(y, 5, 251) * 3) | 0);
+    for (let x = x0; x < x0 + 5 + w; x++) {
+      if (x > 15 || x < 0) continue;
+      const edge = y === 3 || y === 13 || x === x0 || x === x0 + 4 + w;
+      tl.set(x, y, edge ? '#3b3b44' : hash2(x, y, 252) > 0.6 ? '#2a2a31' : '#494954');
+    }
+  }
+  tl.rect(6, 6, 3, 1, '#8f8fa3'); tl.rect(7, 7, 2, 1, '#c6c6d6');   // скол блестит
+  return tl;
+};
+painters.item_apple = (tl) => {
+  tl.clear();
+  for (let y = 4; y < 15; y++) {
+    for (let x = 2; x < 14; x++) {
+      const dx = (x - 7.5) / 5.4, dy = (y - 9.6) / 4.8;
+      const d = dx * dx + dy * dy;
+      if (d > 1.05) continue;
+      let c = d < 0.62 ? '#d8352f' : '#b1241f';
+      if (x < 5 && y < 9) c = '#f0625a';
+      if (hash2(x, y, 253) > 0.9) c = '#c92b26';
+      tl.set(x, y, c);
+    }
+  }
+  tl.rect(7, 2, 1, 3, '#6b4326'); tl.rect(8, 1, 1, 2, '#7d5230');    // черенок
+  tl.rect(9, 2, 3, 2, '#4f9a35'); tl.rect(10, 1, 2, 1, '#63b844');   // лист
+  tl.set(5, 6, '#ffd9d3'); tl.set(6, 5, '#ffe9e4');                   // блик
+  return tl;
+};
+painters.item_bread = (tl) => {
+  tl.clear();
+  for (let y = 5; y < 12; y++) {
+    const inset = y === 5 || y === 11 ? 3 : 1;
+    for (let x = inset; x < 16 - inset; x++) {
+      const top = y < 8;
+      let c = top ? (hash2(x, y, 254) > 0.5 ? '#c98a3f' : '#b87a33') : '#8f5d26';
+      if (y === 6 && x % 4 === 1) c = '#e0ab5c';
+      tl.set(x, y, c);
+    }
+  }
+  for (const k of [3, 7, 11]) { tl.set(k, 7, '#f0c877'); tl.set(k + 1, 8, '#dcae5e'); }   // надрезы
+  return tl.rect(1, 11, 14, 1, '#6f4620');
+};
+painters.item_compass = (tl) => {
+  tl.clear();
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      if (d > 7) continue;
+      if (d > 5.9) tl.set(x, y, hash2(x, y, 255) > 0.6 ? '#9a8542' : '#c4ad5c');       // ободок
+      else tl.set(x, y, d < 1 ? '#efe7d2' : '#dcd3bb');                                 // циферблат
+    }
+  }
+  for (let i = 0; i < 6; i++) { tl.set(7, 2 + i, '#c0392b'); tl.set(8, 2 + i, '#e74c3c'); }   // стрелка на север
+  for (let i = 0; i < 5; i++) { tl.set(8 - i, 9 + i, '#4a4a52'); tl.set(7 - i, 9 + i, '#6b6b73'); }
+  tl.rect(7, 7, 2, 2, '#2b2b31');
+  tl.set(7, 1, '#f4ead0'); tl.set(8, 1, '#f4ead0'); tl.set(1, 7, '#f4ead0'); tl.set(14, 8, '#f4ead0');   // румб
+  return tl;
+};
+painters.item_clock = (tl) => {
+  tl.clear();
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      if (d > 7.2) continue;
+      if (d > 6) tl.set(x, y, hash2(x, y, 256) > 0.55 ? '#b98f26' : '#e8c96a');
+      else tl.set(x, y, d < 0.9 ? '#3a3a42' : '#f4efe0');
+    }
+  }
+  for (let i = 0; i < 4; i++) tl.set(8, 4 + i, '#3a3a42');           // минутная
+  for (let i = 0; i < 3; i++) tl.set(5 + i, 8, '#6b5a2a');           // часовая
+  for (const [x, y] of [[7, 1], [14, 7], [7, 14], [1, 7]]) tl.set(x, y, '#7a5c18');
+  return tl.rect(6, 0, 4, 1, '#c9a33c');                              // ушки
+};
+painters.item_shears = (tl) => {
+  tl.clear();
+  for (let i = 0; i < 7; i++) {                                       // лезвия крестом
+    tl.set(3 + i, 3 + i, '#cfd4dc'); tl.set(4 + i, 3 + i, '#9aa1ad');
+    tl.set(10 - i, 3 + i, '#cfd4dc'); tl.set(9 - i, 3 + i, '#9aa1ad');
+  }
+  tl.set(7, 7, '#7b8290'); tl.set(8, 7, '#7b8290');                   // ось
+  for (const [cx, cy] of [[4, 11], [11, 11]]) {                       // кольца
+    for (let a = 0; a < 12; a++) {
+      const ang = (a / 12) * Math.PI * 2;
+      tl.set(Math.round(cx + Math.cos(ang) * 2.4), Math.round(cy + Math.sin(ang) * 2.4), '#b8422f');
+    }
+  }
+  return tl;
+};
+
 export const TILE_NAMES = Object.keys(painters).filter((n) => painters[n]);
 
 /** name → index в атласе; тайл → PixelTile */

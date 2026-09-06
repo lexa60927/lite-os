@@ -17,6 +17,9 @@ export const DEFAULT_SETTINGS = {
   shaders: 1,
   netName: '', netUrl: '', netRoom: 'world',
   renderScale: 1,
+  fpsLimit: 120,
+  shadows: 1,
+  waterRefl: 2,
   ao: true,
   smoothLight: true,
   viewBob: true,
@@ -34,15 +37,16 @@ const CREATIVE_CATEGORIES = [
   ['Инструменты', null], ['Предметы', null], ['Прочее', null],
 ];
 const CAT_KEYS = {
-  'Стройка': ['stone', 'cobblestone', 'stone_bricks', 'bricks', 'planks', 'log', 'glass', 'sandstone', 'obsidian', 'crafting_table', 'wool_white', 'wool_red', 'wool_blue', 'wool_yellow', 'wool_lime', 'wool_black'],
+  'Стройка': ['stone', 'cobblestone', 'mossy_cobblestone', 'stone_bricks', 'bricks', 'planks', 'log', 'glass', 'ice', 'lantern', 'sandstone', 'obsidian', 'crafting_table', 'wool_white', 'wool_red', 'wool_blue', 'wool_yellow', 'wool_lime', 'wool_black'],
   'Природа': ['grass', 'dirt', 'sand', 'gravel', 'leaves', 'snow', 'podzol', 'bedrock', 'cactus', 'water'],
   'Руды и свет': ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'redstone_ore', 'glowstone'],
   'Растения и ферма': ['tall_grass', 'fern', 'flower_red', 'flower_yellow', 'sapling', 'wheat', 'farmland', 'hay_block'],
 };
 function categoryOf(key) {
   for (const [cat, keys] of Object.entries(CAT_KEYS)) if (keys.includes(key)) return cat;
-  if (/_pickaxe|_axe|_shovel|_sword/.test(key)) return 'Инструменты';
-  if (key === 'emerald' || key.endsWith(':item') || ['leather', 'pork', 'stick', 'coal_item'].includes(key)) return 'Предметы';
+  if (/_pickaxe|_axe|_shovel|_sword/.test(key) || key === 'shears') return 'Инструменты';
+  if (key === 'emerald' || key.endsWith(':item')
+    || ['leather', 'pork', 'stick', 'coal_item', 'flint', 'apple', 'bread', 'compass', 'clock'].includes(key)) return 'Предметы';
   return 'Прочее';
 }
 
@@ -377,9 +381,10 @@ export class Hud {
     el.classList.toggle('cine', !!on);
   }
 
-  showBlockName(id) {
+  /** extra — то, что показывает предмет в руке (компас/часы) — подписью, без поворота иконки. */
+  showBlockName(id, extra = '') {
     const el = this.el.blockname;
-    el.textContent = id ? BLOCKS[id].name : 'Пусто';
+    el.textContent = (id ? BLOCKS[id].name : 'Пусто') + (extra || '');
     el.classList.add('show');
     clearTimeout(this._nameT);
     this._nameT = setTimeout(() => el.classList.remove('show'), 1400);
@@ -397,6 +402,13 @@ export class Hud {
     this.el.vignette.classList.add('hurt');
     setTimeout(() => this.el.vignette.classList.remove('hurt'), 550);
   }
+  /** В творчестве мы бессмертны — линейка сердец там только мешает (запрос). */
+  setHealthVisible(on) {
+    const el = this.el.hp;
+    if (!el) return;
+    el.style.display = on ? '' : 'none';
+  }
+
   setHealth(hp, max = 20) {
     const hearts = [];
     for (let i = 0; i < max / 2; i++) {
@@ -435,7 +447,7 @@ export class Hud {
   // ------------------------------------------------------ настройки
   settingsForm(settings, onChange, extra = {}) {
     const defs = [
-      { key: 'renderDistance', label: 'Дальность прорисовки', min: 2, max: 16, step: 1, fmt: (v) => `${v} чанк · ~${v * 16} блоков` },
+      { key: 'renderDistance', label: 'Дальность прорисовки', min: 2, max: 64, step: 1, fmt: (v) => `${v} чанк · ~${v * 16} блоков${v >= 32 ? ' · прогреть мир займёт время' : v >= 24 ? ' · нужно много памяти' : ''}` },
       { key: 'fov', label: 'Поле зрения', min: 55, max: 110, step: 1, fmt: (v) => `${v}°` },
       { key: 'sensitivity', label: 'Чувствительность мыши', min: 0.2, max: 3, step: 0.05, fmt: (v) => v.toFixed(2) },
       { key: 'sfx', label: 'Громкость эффектов', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
@@ -453,7 +465,25 @@ export class Hud {
           [0, 'Выкл — базовая картинка'],
           [1, 'Мягкие — блики, дымка, живая вода'],
           [2, 'Красивые — тонмаппинг, небо в отражениях, виньетка'],
+          [3, 'Ультра — тени от солнца, отражающая вода, закаты (нужна мощная видеокарта)'],
         ],
+      },
+      {
+        key: 'shadows',
+        label: 'Тени от солнца (нужны «Красивые» или «Ультра»)',
+        options: [[0, 'выкл — быстрее всего'], [1, 'рядом — зона 128 блоков'], [2, 'широко — зона 192 блока']],
+      },
+      {
+        key: 'waterRefl',
+        label: 'Отражения воды (только «Ультра»)',
+        options: [[0, 'нет — только блики'], [1, 'небо'], [2, 'небо + мир (куб-проба)']],
+      },
+      {
+        // 0 = без ограничения: кадр идёт сразу, как только монитор его отдаст.
+        // Лимит нужен, чтобы 144-Гц монитор не сжигал батарею на воксельном мире.
+        key: 'fpsLimit',
+        label: 'Лимит кадров, FPS',
+        options: [[20, '20'], [30, '30'], [45, '45'], [60, '60'], [75, '75'], [90, '90'], [120, '120 — по умолчанию'], [144, '144'], [165, '165'], [240, '240'], [0, 'без лимита']],
       },
     ];
     const checks = [

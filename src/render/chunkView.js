@@ -58,7 +58,44 @@ export class ChunkView {
 
   static key(cx, cz) { return chunkKey(cx, cz); }
 
-  setRenderDistance(r) { this.renderDistance = Math.max(2, Math.min(16, r | 0)); }
+  /**
+   * Дальность прорисовки: 2..64 чанка (запрос был — «и 32, а то и 64»).
+   * 64 — это 16641 чанк, поэтому вместе с радиусом поднимаем бюджет стриминга
+   * и отпускаем чанки за окном обзора: иначе мир на окраинах достраивался бы
+   * минутами, а память кончилась бы раньше.
+   */
+  setRenderDistance(r) {
+    this.renderDistance = Math.max(2, Math.min(64, r | 0));
+    const r2 = this.renderDistance;
+    this.streamBudget = r2 <= 12 ? 6 : Math.min(24, 6 + (r2 - 12) * 0.35);
+    this._cullEvery = r2 > 16 ? 40 : 0;
+  }
+
+  /**
+   * Освобождает чанки заметно дальше радиуса обзора. Нужно только при больших
+   * дальностях (32/64): без этого мир накапливает все посещённые чанки, а 64 —
+   * это 16641 чанк по 24 КБ. Запас в 3 чанка оставляет соседям данные для
+   * мешинга грани, а правки игрока живут в world.edits и переживают выгрузку.
+   */
+  cullFarChunks(playerPos, margin = 3) {
+    const w = this.world;
+    if (!w?.chunks?.size) return 0;
+    const pcx = Math.floor(playerPos.x / CHUNK), pcz = Math.floor(playerPos.z / CHUNK);
+    const lim = this.renderDistance + margin;
+    const lim2 = lim * lim;
+    let dropped = 0;
+    for (const k of [...w.chunks.keys()]) {
+      const [cx, cz] = decodeChunkKey(k);
+      if (!Number.isFinite(cx) || !Number.isFinite(cz)) continue;
+      const dx = cx - pcx, dz = cz - pcz;
+      if (dx * dx + dz * dz <= lim2) continue;
+      const obj = this.objects.get(k);
+      if (obj) { this.disposeObject(obj); this.objects.delete(k); }
+      w.removeChunk(cx, cz);
+      dropped++;
+    }
+    return dropped;
+  }
 
   /** Состояние конвейера для отладочной строки: дыры в мире должны быть видны,
    *  а не прятаться в консоли (оверлей Vite выключен намеренно). */
@@ -175,6 +212,15 @@ export class ChunkView {
     this.stats.pending = world.dirtyMesh.size;
     this.stats.ms = performance.now() - now;
     this.stats.frameMs = this._frameMs;
+    // уборка дальних чанков — не каждый кадр: обход карты на 16 тысяч ключей
+    // сам по себе дорогой, а память растёт медленно
+    if (this._cullEvery) {
+      this._cullT = (this._cullT ?? 0) + 1;
+      if (this._cullT >= this._cullEvery) {
+        this._cullT = 0;
+        this.stats.culled = this.cullFarChunks(playerPos);
+      }
+    }
 
     // 4. выгрузка (гистерезис: чанки упреждения не выбрасываем в том же кадре)
     const keep = R + 3;
@@ -263,8 +309,41 @@ export class ChunkView {
     m.updateMatrix();
     m.renderOrder = material === this.materials.water ? 2 : 0;
     m.frustumCulled = true;
+    this._shadowFlags(m, material === this.materials.water);
     this.scene.add(m);
     return m;
+  }
+
+  /**
+   * Тени: суша бросает тень и принимает её, вода — только принимает (иначе
+   * полупрозрачная поверхность мусорила бы само затенением). customDepthMaterial
+   * нужен обязательно: без него в карту теней уходит сплошной «квадрат листвы», и под деревом
+   * была бы тень-плашка вместо дырявой, как в жизни.
+   */
+  _shadowFlags(m, isWater) {
+    if (!m) return m;
+    const on = !!this.shadows;
+    m.castShadow = on && !isWater;
+    m.receiveShadow = on;
+    if (!isWater) m.customDepthMaterial = on ? (this.depthMaterial ?? null) : null;
+    return m;
+  }
+
+  /** Включить/выключить тени для всех мешей этого вида. */
+  setShadows(on, depthMaterial = null) {
+    this.shadows = !!on;
+    this.depthMaterial = depthMaterial ?? this.depthMaterial ?? null;
+    for (const obj of this.objects.values()) {
+      this._shadowFlags(obj.solid, false);
+      this._shadowFlags(obj.water, true);
+    }
+  }
+
+  /** Меши воды — чтобы отражение не снимало само себя. */
+  get waterMeshes() {
+    const out = [];
+    for (const obj of this.objects.values()) if (obj.water) out.push(obj.water);
+    return out;
   }
 
   disposeObject(obj) {

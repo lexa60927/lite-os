@@ -51,6 +51,26 @@ const TOOL_DEFS = [];
   }
 }
 
+/**
+ * Новое содержимое 0.3.0 (иды 63+): три блока и шесть предметов.
+ * Еда (`food`) и «информация» (`info`) — поля, которые читает game-слой:
+ * яблоко/хлеб съедаются ПКМ, компас/часы показывают данные в панели F3 и при
+ * выборе слота. `bonus` — что может выпасть из блока вместо основного дропа
+ * (детерминированно: исход зависит от координат, а не от random, чтобы один и
+ * тот же гравий на всех клиентах давал одно и то же).
+ */
+const NEW_DEFS = [
+  { id: 63, name: 'Замшелый булыжник', key: 'mossy_cobblestone', tiles: { all: 'mossy_cobblestone' }, render: 'cube', solid: true, opaque: true, breakable: true, hardness: 1.3, sound: 'stone' },
+  { id: 64, name: 'Лёд', key: 'ice', tiles: { all: 'ice' }, render: 'cube', solid: true, opaque: false, cutout: true, hideSame: true, breakable: true, hardness: 0.6, sound: 'stone', drops: 'ice' },
+  { id: 65, name: 'Фонарь', key: 'lantern', tiles: { all: 'lantern' }, render: 'torch', solid: false, opaque: false, cutout: true, breakable: true, hardness: 0.4, sound: 'stone', light: 1.0, fullBright: true, slim: true },
+  { id: 66, name: 'Кремень', key: 'flint', tiles: { all: 'item_flint' }, render: 'item', sound: 'soft', bonusOf: 'gravel', bonus: 0.16 },
+  { id: 67, name: 'Яблоко', key: 'apple', tiles: { all: 'item_apple' }, render: 'item', sound: 'soft', food: 4, bonusOf: 'leaves', bonus: 0.14 },
+  { id: 68, name: 'Хлеб', key: 'bread', tiles: { all: 'item_bread' }, render: 'item', sound: 'soft', food: 8 },
+  { id: 69, name: 'Компас', key: 'compass', tiles: { all: 'item_compass' }, render: 'item', sound: 'soft', info: 'spawn' },
+  { id: 70, name: 'Часы', key: 'clock', tiles: { all: 'item_clock' }, render: 'item', sound: 'soft', info: 'time' },
+  { id: 71, name: 'Ножницы', key: 'shears', tiles: { all: 'item_shears' }, render: 'item', sound: 'wood', tool: { kind: 'shears', mine: ['grass', 'plant', 'wool'], speed: 4.2, damage: 2, uses: 118 } },
+];
+
 export const BLOCKS = [
   {
     id: 0, name: 'Воздух', key: 'air', tiles: null, render: 'none',
@@ -109,6 +129,7 @@ export const BLOCKS = [
   // ВАЖНО: BLOCKS индексируется по id, поэтому новые блоки — только в конце
   // и с id, равным числу предыдущих записей (иначе BLOCKS[id] читает чужой def).
   ...VILLAGE_DEFS,
+  ...NEW_DEFS,
 ];
 
 export const BY_KEY = new Map(BLOCKS.map((b) => [b.key, b]));
@@ -131,6 +152,22 @@ export const dropOf = (id) => {
   if (def.drops) return byKey(def.drops);
   return def.item || def.replaceable ? 0 : id;
 };
+/**
+ * Бонусный дроп из блока: гравий может дать кремень, листва — яблоко.
+ * Исход считаем из координат (hash2), а не из random(): один и тот же блок у
+ * всех игроков и во всех клиентах даёт одно и то же, и сетевая синхронизация
+ * не начинает спорить сама с собой.
+ */
+export function bonusDropOf(id, x, y, z) {
+  for (const def of NEW_DEFS) {
+    if (!def.bonusOf || def.bonusOf !== BLOCKS[id]?.key) continue;
+    const h = (x * 73856093) ^ (y * 19349663) ^ (z * 83492791);
+    const r = ((h >>> 0) % 1000) / 1000;
+    if (r < (def.bonus ?? 0.15)) return def.id;
+  }
+  return 0;
+}
+
 /** Скорость поломки с учётом инструмента: 1 = рука. */
 export function mineMultiplier(def, tool) {
   if (!def || !tool) return 1;

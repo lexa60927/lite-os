@@ -16,6 +16,15 @@ export const RECIPES = [
   { out: 'glass', n: 1, need: [['sand', 1], ['coal_item', 1]], table: true, name: 'Стекло' },
   { out: 'stone_bricks', n: 4, need: [['stone', 2], ['coal_item', 1]], table: true, name: 'Каменный кирпич' },
   { out: 'bricks', n: 4, need: [['clay', 2], ['coal_item', 1]], table: true, name: 'Кирпичи' },
+  // ————— 0.3.0: новое содержимое
+  { out: 'mossy_cobblestone', n: 1, need: [['cobblestone', 1], ['sapling', 1]], name: 'Замшелый булыжник' },
+  { out: 'ice', n: 1, need: [['snow', 4]], table: true, name: 'Лёд' },
+  { out: 'lantern', n: 2, need: [['glass', 1], ['flint', 1], ['coal_item', 1]], name: 'Фонарь' },
+  { out: 'flint', n: 1, need: [['gravel', 1]], name: 'Кремень из гравия' },
+  { out: 'bread', n: 1, need: [['wheat', 3]], table: true, name: 'Хлеб' },
+  { out: 'compass', n: 1, need: [['iron_ore', 4], ['emerald', 1]], table: true, name: 'Компас' },
+  { out: 'clock', n: 1, need: [['gold_ore', 4], ['redstone_ore', 1]], table: true, name: 'Часы' },
+  { out: 'shears', n: 1, need: [['iron_ore', 2]], name: 'Ножницы' },
   // ————— деревянные инструменты (руками)
   { out: 'wood_pickaxe', n: 1, need: [['planks', 3], ['stick', 1]], name: 'Кирка (дерево)' },
   { out: 'wood_axe', n: 1, need: [['planks', 3], ['stick', 2]], name: 'Топор (дерево)' },

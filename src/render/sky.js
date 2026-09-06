@@ -12,31 +12,58 @@ void main() {
 export const SKY_FRAG = /* glsl */`
 precision highp float;
 uniform vec3 uZenith, uHorizon, uNight, uSunDir, uSunTint;
-uniform float uDay, uNightF;
+uniform float uDay, uNightF, uDusk, uUltra;
 varying vec3 vDir;
 void main() {
-  float h = clamp(vDir.y * 0.5 + 0.5, 0.0, 1.0);
+  vec3 dir = normalize(vDir);
+  float h = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
   vec3 sky = mix(uHorizon, uZenith, pow(h, 0.75));
   sky = mix(uNight, sky, uDay);
   // тёплое зарево вокруг солнца
-  float sun = max(dot(normalize(vDir), normalize(uSunDir)), 0.0);
+  float sun = max(dot(dir, normalize(uSunDir)), 0.0);
   sky += uSunTint * pow(sun, 26.0) * 0.9 * uDay;
   sky += uSunTint * pow(sun, 3.0) * 0.14 * uDay;
   // лёгкая полоса на горизонте ночью
   sky += vec3(0.02, 0.03, 0.06) * uNightF * (1.0 - h);
+
+  if (uUltra > 0.5) {
+    // «Ультра» — физика цвета вместо одного градиента (без bloom: гало делаем
+    // намеренно слабым, чтобы солнце не расползалось белым пятном):
+    // 1) Рэлей: чем выше смотрим, тем синее; у горизонта атмосфера толще, и там
+    //    же живёт тёплая дымка, поэтому переход делаем не линейным.
+    sky = mix(uHorizon, uZenith, pow(h, 0.62)) * (0.94 + 0.12 * h);
+    sky = mix(uNight * 1.25, sky, uDay);
+    vec3 sdir = normalize(uSunDir);
+    float az = max(dot(normalize(vec3(dir.x, 0.0, dir.z) + vec3(1e-4)),
+                       normalize(vec3(sdir.x, 0.0, sdir.z))), 0.0);
+    float band = exp(-abs(dir.y) * 5.5);
+    // 2) Закат греет горизонт с солнечной стороны и оставляет послесвечение с
+    //    противоположной — та самая «вторая полоса», которой все добиваются.
+    sky += uSunTint * band * (pow(az, 2.0) + 0.45 * pow(1.0 - az, 3.0)) * (0.4 + 0.9 * uDusk);
+    // 3) Ми-рассеяние: плотное гало у диска. Значения заведомо > 1 — их подхватывает
+    //    bloom, и солнце начинает светиться, а не быть белым квадратом.
+    float mie = pow(sun, 14.0) * 0.30 + pow(sun, 90.0) * 0.55 + pow(sun, 900.0) * 0.9;
+    sky += uSunTint * mie * (0.1 + uDay * 0.9);
+    // 4) Ночью — Млечный Путь полосой вдоль наклонной плоскости: без него звёздное
+    //    небо выглядит «нарисованным», а не объёмным.
+    vec3 axis = normalize(vec3(0.42, 0.26, 1.0));
+    float mw = exp(-pow(dot(dir, axis), 2.0) * 9.0);
+    sky += vec3(0.055, 0.06, 0.11) * mw * uNightF * 1.35;
+    sky += vec3(0.02, 0.026, 0.05) * pow(max(dir.y, 0.0), 0.6) * uNightF;
+  }
   gl_FragColor = vec4(sky, 1.0);
 }
 `;
 
 /** Пиксельные облака Minecraft-стиля. */
-function cloudTexture() {
+function cloudTexture(seedScale = 1, bias = 0.06) {
   const n = new Noise(9137);
   const S = 128;
   const data = new Uint8ClampedArray(S * S * 4);
   for (let z = 0; z < S; z++) {
     for (let x = 0; x < S; x++) {
-      const v = n.fbm2(x / 26, z / 26, 4) * 1.5;
-      const on = v > 0.06 ? 1 : 0;
+      const v = n.fbm2((x * seedScale) / 26, (z * seedScale) / 26, 4) * 1.5;
+      const on = v > bias ? 1 : 0;
       const shade = on ? (v > 0.28 ? 255 : 232) : 0;
       const i = (z * S + x) * 4;
       data[i] = shade; data[i + 1] = shade; data[i + 2] = 255;
@@ -106,6 +133,8 @@ export class Sky {
       uSunDir: { value: new THREE.Vector3(0, 1, 0) },
       uSunTint: { value: new THREE.Color(1, 0.85, 0.6) },
       uDay: { value: 1 },
+      uDusk: { value: 0 },
+      uUltra: { value: 0 },
     };
     const dome = new THREE.Mesh(
       new THREE.SphereGeometry(1, 24, 16),
@@ -166,6 +195,22 @@ export class Sky {
 
     this.dayLight = 1;
     this.sunElevation = 1;
+    this.dusk = 0;
+    this.ultra = false;
+    // Второй слой облаков: отдельная высота и скорость — параллакс читается
+    // сразу, и небо перестаёт быть «картинкой на потолке». Видим только в ульте.
+    const cirrusTex = cloudTexture(1.9, 0.55);
+    cirrusTex.repeat.set(5, 5);
+    this.cirrusTex = cirrusTex;
+    this.cirrus = new THREE.Mesh(
+      new THREE.PlaneGeometry(3200, 3200),
+      new THREE.MeshBasicMaterial({ map: cirrusTex, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide, color: 0xffffff }),
+    );
+    this.cirrus.rotation.x = -Math.PI / 2;
+    this.cirrus.position.y = 168;
+    this.cirrus.renderOrder = -8;
+    this.cirrus.visible = false;
+    this.group.add(this.cirrus);
   }
 
   /**
@@ -187,6 +232,8 @@ export class Sky {
     this.uniforms.uDay.value = day;
     this.uniforms.uNightF.value = night;
     this.uniforms.uSunTint.value.setRGB(1, 0.62 + 0.3 * (1 - dusk), 0.35 + 0.5 * (1 - dusk));
+    this.uniforms.uDusk.value = dusk;
+    this.dusk = dusk;
 
     // цвета неба
     const zen = this.uniforms.uZenith.value;
@@ -197,23 +244,46 @@ export class Sky {
       hor.lerp(new THREE.Color(0.98, 0.46, 0.22), dusk * 0.75);
       zen.lerp(new THREE.Color(0.42, 0.3, 0.6), dusk * 0.4);
     }
+    if (this.ultra) {
+      // Ультра: закат должен быть событием. Сильнее гримим горизонт и темним
+      // зенит — иначе оранжевая полоса тонет в общем сером, как на «мягких».
+      zen.lerp(new THREE.Color(0.07, 0.16, 0.46), 0.45);
+      hor.lerp(new THREE.Color(1.0, 0.5, 0.24), dusk * 0.55);
+    }
 
     this.dome.position.copy(camPos);
     this.stars.position.copy(camPos);
     this.clouds.position.x = camPos.x + t * 900;
     this.clouds.position.z = camPos.z;
     this.cloudTex.offset.x = t * 0.9;
+    // Облака в ульте ловят свет: розовеют на закате и темнеют ночью. Цвет
+    // пересчитываем каждый кадр от нуля (не домножаем), иначе оттенки накапливались бы.
+    const cl = this.clouds.material.color;
+    const dim = 0.3 + this.dayLight * 0.7;
+    if (this.ultra) cl.setRGB(1.02 * dim, (0.97 - dusk * 0.13) * dim, (0.95 - dusk * 0.34) * dim);
+    else cl.setRGB(dim, dim, dim);
+    if (this.ultra) {
+      // второй слой: выше, реже, быстрее — параллакс и объём неба
+      this.cirrus.position.x = camPos.x - t * 1500;
+      this.cirrus.position.z = camPos.z + 140;
+      this.cirrusTex.offset.x = -t * 1.7;
+      this.cirrus.material.opacity = 0.08 + cloudAmount * 0.3;
+      this.cirrus.material.color.setRGB(1.05 * dim, (0.99 - dusk * 0.1) * dim, (1 - dusk * 0.28) * dim);
+    }
     this.stars.material.opacity = Math.pow(night, 1.4) * 0.95;
     this.clouds.material.opacity = 0.25 + cloudAmount * 0.7;
 
     const far = 1.0;
     this.sun.position.copy(camPos).addScaledVector(dir, 480);
     this.sun.lookAt(camPos);
-    this.sun.material.color.setRGB(1, 0.94 - dusk * 0.25, 0.78 - dusk * 0.35);
+    // Солнце остаётся в диапазоне 0..1: «свечение» сверху накручивали bloom и
+    // HDR-буфер, а без них значения > 1 — просто выбитое белое пятно.
+    this.sun.material.color.setRGB(1, 0.95 - dusk * 0.16, this.ultra ? 0.84 - dusk * 0.3 : 0.78 - dusk * 0.35);
     this.sun.material.opacity = THREE.MathUtils.clamp(day * 1.6, 0, 1);
     this.moon.position.copy(camPos).addScaledVector(dir, -480);
     this.moon.lookAt(camPos);
     this.moon.material.opacity = THREE.MathUtils.clamp(night * 1.4, 0, 1);
+    if (this.ultra) this.moon.material.color.setRGB(0.9, 0.95, 1.0);   // холодный лунный диск
 
     if (voxelUniforms) {
       const sunI = 0.18 + day * 0.92;
@@ -224,11 +294,23 @@ export class Sky {
       // направление солнца для бликов в шейдере вокселей. Ниже горизонта его
       // держать нельзя: иначе ночные нижние грани получали бы «солнечный»
       // коэффициент сильнее верхних, и рельеф выворачивалось наизнанку.
+      // цвет зенита нужен водам: отражение неба считается в шейдере воды
+      if (voxelUniforms.uZenithC) voxelUniforms.uZenithC.value.copy(zen);
       if (voxelUniforms.uSunDirW) {
         voxelUniforms.uSunDirW.value.set(dir.x, Math.max(dir.y, 0.05), dir.z).normalize();
       }
     }
     return { day, night, dusk, horizonColor: hor.clone(), fogColor: voxelUniforms ? voxelUniforms.uFogColor.value.clone() : hor.clone() };
+  }
+
+  /** «Ультра»: свои ветки в шейдере неба, ярче светила, второй слой облаков. */
+  setUltra(on) {
+    this.ultra = !!on;
+    this.uniforms.uUltra.value = this.ultra ? 1 : 0;
+    if (this.cirrus) this.cirrus.visible = this.ultra;
+    // диск меньше, гало больше: солнце перестаёт быть «белым квадратом на обоях»
+    this.sun.scale.setScalar(this.ultra ? 34 : 46);
+    this.moon.scale.setScalar(this.ultra ? 23 : 30);
   }
 
   dispose() {

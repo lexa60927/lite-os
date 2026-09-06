@@ -564,6 +564,109 @@ console.log(`✔ UI и настройки; пауза: ${game.statsLine()}`);
 game.resume();
 await dom.__pumpFrames(20);
 
+// --- ограничитель кадров: 20 к/с ≠ медленнее игра ---
+// считаем не вызовы step(), а физические подшаги: мир догоняет фиксированным
+// шагом 1/60, и именно их число должно остаться прежним при любом лимите
+{
+  const lim = game.settings.fpsLimit;
+  await dom.__pumpFrames(80, 16.7);   // пусть генерация чанков выдохнется — она тоже забирает кадры
+  let ticks = 0;
+  const updWas = p.update.bind(p);
+  p.update = (dt, input) => { ticks++; return updWas(dt, input); };
+  game.settings.fpsLimit = 0;
+  game._nextDraw = 0;
+  const a0 = renders;
+  ticks = 0;
+  await dom.__pumpFrames(24, 16.7);
+  const free = renders - a0, ticksFree = ticks;
+  game.settings.fpsLimit = 20;
+  game._nextDraw = 0;
+  const a1 = renders;
+  ticks = 0;
+  await dom.__pumpFrames(24, 16.7);
+  const capped = renders - a1, ticksCapped = ticks;
+  p.update = updWas;
+  game.settings.fpsLimit = lim ?? 120;
+  game._nextDraw = 0;
+  const ok = free >= 22 && capped >= 6 && capped <= 13 && Math.abs(ticksFree - ticksCapped) <= 3;
+  console.log(`${ok ? '✔' : '✘'} лимит FPS: без лимита ${free}/24 кадров и ${ticksFree} подшагов мира, с 20 к/с ${capped}/24 кадра и ${ticksCapped} подшагов`);
+  if (free < 22) throw new Error(`без лимита рисуем ${free} из 24 кадров`);
+  if (!(capped >= 6 && capped <= 13)) throw new Error(`лимит 20 к/с дал ${capped} кадров из 24 по 16.7 мс`);
+  if (Math.abs(ticksFree - ticksCapped) > 3) throw new Error(`мир получил ${ticksCapped} подшагов вместо ${ticksFree}: лимит кадров замедляет игру`);
+}
+
+// --- ультра: тени, отражения, отказ без GL ---
+{
+  const shadersWas = game.settings.shaders;
+  game.settings.shadows = 2;
+  game.settings.waterRefl = 2;
+  game.applySettings('shaders', 3);
+  const lit = game.applyLighting(game.settings);
+  await dom.__pumpFrames(8);
+  const castOn = game.sunShadow.light.castShadow === true;
+  const shadowZone = game.sunShadow.light.shadow.camera.right * 2;
+  const uShadow = game.materials.uniforms.uShadow.value;
+  const probeDead = !game.probe || game.probe.enabled === false;
+  const uReflDead = game.materials.uniforms.uRefl.value;
+  const stillRunning = game.state.running && game.state.world.chunkCount > 100;
+  // живая проба (вNode GL нет) — проверяем, что отражение всё-таки подключается
+  const probeWas = game.probe;
+  let probes = 0;
+  game.probe = { enabled: true, ok: true, texture: {}, stats: { updates: 0 }, setEnabled() {}, update() { probes++; } };
+  game.applyLighting(game.settings);
+  const uReflLive = game.materials.uniforms.uRefl.value;
+  await dom.__pumpFrames(4);
+  game.probe = probeWas;
+  game.applySettings('shaders', 0);
+  const castOff = game.sunShadow.light.castShadow === false && game.materials.uniforms.uShadow.value === 0;
+  game.applySettings('shaders', shadersWas);
+  const ok = lit.shadowOn && lit.refl && castOn && probeDead && stillRunning
+    && uReflDead === 0 && uReflLive > 0.5 && probes > 0 && castOff;
+  console.log(`${ok ? '✔' : '✘'} ультра: тени (зона ${shadowZone} бл, сила ${uShadow.toFixed(2)}), отражения включаются с живой пробой (${uReflLive.toFixed(2)}, снимков ${probes}), без GL проба гаснет и uRefl=0, выключение возвращает прежнюю картинку`);
+  if (!lit.shadowOn || !lit.refl) throw new Error('applyLighting не включил тени/отражения при шейдерах 3');
+  if (!castOn) throw new Error('light.castShadow не поднят — карты теней не будет');
+  if (!probeDead) throw new Error('отражения не погасли без GL — игра упала бы на первом же кадре');
+  if (uReflDead !== 0) throw new Error('мёртвая проба оставила отражения в шейдере');
+  if (!(uReflLive > 0.5) || probes === 0) throw new Error('живая проба не подключила отражения воды');
+  if (!stillRunning) throw new Error('ультра убила игру');
+  if (!castOff) throw new Error('выключение теней не вернуло прежнюю картинку');
+}
+
+// --- креатив без сердец, еда, компас/часы, бонусный дроп ---
+{
+  const inv = game.inv;
+  game.setCreative(true);
+  const hidden = game.hud.el.hp.style.display === 'none';
+  game.setCreative(false);
+  const shown = game.hud.el.hp.style.display !== 'none';
+  const { bonusDropOf } = await import('../src/engine/blocks.js');
+  inv.creative = false;
+  game.state.hp = 8;
+  inv.set('hot', inv.sel, byKey('bread'), 3);
+  st.lastHit = null;
+  game.tryPlace();
+  const healed = game.state.hp === 16, spent = inv.n('hot', inv.sel) === 2, cd = st.placeCd > 0.5;
+  game.state.worldSpawn = [p.x + 300, p.z];
+  const comp = game.handInfo(byKey('compass'));
+  game.state.time = 0.25;
+  const clockTxt = game.handInfo(byKey('clock'));
+  let flintAt = null;
+  const gravel = byKey('gravel'), flint = byKey('flint');
+  for (let x = 0; x < 60 && !flintAt; x++) for (let z = 0; z < 60 && !flintAt; z++) if (bonusDropOf(gravel, x, 40, z) === flint) flintAt = [x, 40, z];
+  const dropFlint = !!flintAt && game.dropFor({ id: gravel, x: flintAt[0], y: 40, z: flintAt[2] }) === flint;
+  const dropStone = game.dropFor({ id: byKey('stone'), x: 1, y: 20, z: 3 }) === byKey('cobblestone');
+  console.log(`${hidden && shown && healed && spent && cd ? '✔' : '✘'} сердец в креативе нет: ${hidden}, вернулись: ${shown} · хлеб: HP 8→${game.state.hp}, стек 3→${inv.n('hot', inv.sel)}, пауза ${st.placeCd.toFixed(2)} с`);
+  if (!hidden) throw new Error('в творчестве линейка сердец осталась');
+  if (!shown) throw new Error('в выживании сердца не вернулись');
+  if (!healed || !spent) throw new Error(`еда не работает: hp=${game.state.hp} стек=${inv.n('hot', inv.sel)}`);
+  if (!cd) throw new Error('после еды нет паузы — стек съелся бы за одно удержание ПКМ');
+  console.log(`${/спавн 300/.test(comp) && /12:00/.test(clockTxt) ? '✔' : '✘'} компас: ${comp.trim() || '—'} · часы: ${clockTxt.trim() || '—'}`);
+  if (!/спавн 300/.test(comp)) throw new Error(`компас врёт: ${comp}`);
+  if (!/12:00/.test(clockTxt)) throw new Error(`часы врут: ${clockTxt}`);
+  if (!dropFlint || !dropStone) throw new Error('бонусный дроп не подключён к игре');
+  console.log(`✔ бонусный дроп: гравий по координатам (${flintAt[0]}, ${flintAt[2]}) даёт кремень, камень — булыжник`);
+}
+
 // --- вода ---
 let waterFound = null;
 outer: for (let r = 0; r < 80; r += 4) {
