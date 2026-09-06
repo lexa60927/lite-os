@@ -51,6 +51,19 @@ const read = async (rel) => {
   if (mats.solid.uniforms.uMap !== mats.water.uniforms.uMap) bad('атлас не общий — два источника правды про текстуру');
 
   // «выключено» обязано означать «как раньше»: сила тени 0 → shade === 1.0
+  // три не подмешивает UniformsLib.lights в ShaderMaterial сам, но `lights: true`
+  // обязывает их нести: WebGLRenderer пишет uniforms.directionalLights.value = …
+  // и без этих ключей первый же кадр с тенями падает («Cannot set properties of
+  // undefined (setting 'needsUpdate')») — в браузере это белый экран и замершая игра
+  {
+    const need = Object.keys(THREE.UniformsLib.lights);
+    for (const [name, mat] of [['solid', mats.solid], ['water', mats.water]]) {
+      const lack = need.filter((k) => !mat.uniforms[k] || !('value' in mat.uniforms[k]));
+      if (lack.length) bad(`у материала «${name}» нет световых униформ: ${lack.join(', ')} — тени уронят рендер`);
+      if (mat.uniforms.ambientLightColor === THREE.UniformsLib.lights.ambientLightColor) bad(`«${name}» делит световые униформы с глобальным UniformsLib — два мира в одной вкладке начнут светить друг другу`);
+      if (mat.uniforms.directionalShadowMap !== mats.solid.uniforms.directionalShadowMap) bad(`directionalShadowMap у «${name}» отдельный — суша и вода начнут брать разные карты теней`);
+    }
+  }
   mats.setShadow(0);
   if (mats.uniforms.uShadow.value !== 0) bad('setShadow(0) не обнулил силу — выключенные тени всё равно темнят картинку');
   mats.setShadow(5);

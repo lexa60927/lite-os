@@ -254,7 +254,13 @@ void main() {
 `;
 
 export function createVoxelMaterials(atlas) {
+  // `lights: true` обязывает материал нести light-униформы: THREE не подмешивает
+  // UniformsLib.lights в ShaderMaterial сам, а WebGLRenderer на каждом кадре пишет
+  // uniforms.directionalLights.value = … — без этих ключей первый же кадр с
+  // включёнными тенями падает с «Cannot set properties of undefined (setting
+  // 'needsUpdate')». Клонируем: три обновляет эти объекты на программу.
   const shared = {
+    ...THREE.UniformsUtils.clone(THREE.UniformsLib.lights),
     uMap: { value: atlas.texture },
     uTime: { value: 0 },
     uSun: { value: 1.0 },
