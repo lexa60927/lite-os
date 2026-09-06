@@ -820,6 +820,31 @@ console.log(`✔ сид из строки → ${game.state.seed}, чанков $
   console.log('✔ свои моды: загрузка в игре выключена (панели нет), API жив — шейдер применяется на живом материале, мод с блоками честно требует перезагрузки, откат чист');
 }
 
+// --- вариант материала без производных: на WebGL1 без OES_standard_derivatives
+// запрос расширения = несобранная программа = пустой экран вместо мира
+{
+  const { Game } = await import('../src/main.js');
+  const yes = Game.supportsDerivatives({ capabilities: { isWebGL2: true } });
+  const no = Game.supportsDerivatives({ capabilities: { isWebGL2: false }, getContext: () => ({ getExtension: () => null }) });
+  const blind = Game.supportsDerivatives({});
+  if (yes !== true || no !== false || blind !== true) {
+    throw new Error(`supportsDerivatives врёт: WebGL2 ${yes}, без расширения ${no}, без данных ${blind} (ожидалось true/false/true)`);
+  }
+  const { createVoxelMaterials } = await import('../src/render/voxelMaterial.js');
+  const mats = createVoxelMaterials(game.atlas, {}, { derivatives: false });
+  game.materials.solid.dispose(); game.materials.water.dispose();
+  game.materials = mats;
+  game.chunkView.setMaterials(mats);
+  game.applyLighting();
+  await dom.__pumpFrames(30);
+  game.step(1 / 60);
+  const d = (mats.solid.fragmentShader.match(/\bdF(?:dx|dy)\s*\(/g) || []).length;
+  const drawn = [...game.chunkView.objects.values()].filter((r) => r.solid && r.solid.visible).length;
+  console.log(`${d === 0 && drawn > 0 && errors.length === 0 ? '✔' : '✘'} материал без производных: вызовов dFdx ${d}, видимых мешей ${drawn}, кадров прокручено без ошибок`);
+  if (d !== 0 || drawn === 0) throw new Error('вариант без производных не собрался или оставил мир без мешей');
+  if (errors.length) throw new Error('сбойный кадр в варианте без производных: ' + errors[0]);
+}
+
 // --- блок в руке: не уезжать за край при любом FOV и окне ---
 {
   const THREE = await import('three');

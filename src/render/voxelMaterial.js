@@ -320,7 +320,20 @@ export function glslTypeOf(v) {
  * возвращаются ровно VOXEL_VERT/VOXEL_FRAG без строк-якорей: «шейдеры мода» не
  * имеют права менять базовую картинку — это проверяется тестом на совпадение строк.
  */
-export function buildVoxelShaders(mods = {}) {
+const NO_DERIV_FROM = `    nrm = normalize(cross(dFdx(vWorld), dFdy(vWorld)));`;
+/**
+ * Замена для драйверов без GL_OES_standard_derivatives (WebGL1 без расширения):
+ * нормаль грани из производных восстановить нечем, зато ориентация грани уже
+ * лежит в vLight.y — «сколько неба видит грань» (сверху 1, сбоку ~0.55, снизу
+ * ~0.2). Солнечный множитель берём от него: картинка чуть мягче, чем с dFdx, но
+ * мир собирается и остаётся миром. Без этого материала не компилировался бы на
+ * старых GPU вовсе — а это пустой экран вместо мира.
+ */
+const NO_DERIV_TO = `    // nrm остаётся «вверх»: производных на этом драйвере нет
+    lit0 = 0.72 + 0.5 * clamp(sky * 1.15, 0.0, 1.0) * clamp(uSun, 0.0, 1.0);`;
+
+export function buildVoxelShaders(mods = {}, opts = {}) {
+  const derivatives = opts.derivatives !== false;
   const list = (x) => (Array.isArray(x) ? x : []);
   const code = (items) => items.map((it) => `\n  // ——— шейдер мода «${it.mod}»\n${it.code}`).join('');
   const decl = mods.uniforms
@@ -330,6 +343,16 @@ export function buildVoxelShaders(mods = {}) {
   // Якорь — отдельная строка с комментарием. Если вставлять нечего, строку надо
   // убрать целиком, иначе в GPU-исходник попадёт пустая строка и «без модов» уже
   // не будет равно «как до мод-системы» (за этим и следит dev/test-mods.mjs).
+  // Сначала снимаем зависимость от расширения, потом вставляем коды модов:
+  // якоря при этом не съезжают (их строки живут до и после блока нормалей).
+  const swapDeriv = (src0) => {
+    if (derivatives || !src0.includes(NO_DERIV_FROM)) return src0;
+    const i = src0.indexOf(NO_DERIV_FROM);
+    const tail = 'lit0 = 0.72 + 0.5 * max(dot(nrm, uSunDirW), 0.0);';
+    const j = src0.indexOf(tail, i);
+    if (j < 0) return src0;
+    return src0.slice(0, i) + NO_DERIV_TO + src0.slice(j + tail.length);
+  };
   const inject = (src, name, text) => {
     const marker = new RegExp(`[ \\t]*/\\*${name}\\*/[ \\t]*\\n?`);
     return text ? src.replace(marker, () => `${text.trim()}\n`) : src.replace(marker, '');
@@ -339,13 +362,14 @@ export function buildVoxelShaders(mods = {}) {
   const block = (items) => (items.length ? code(items.map((it) => ({ mod: it.mod, code: `{\n    ${it.code}\n  }` }))) : '');
   let vert = inject(VOXEL_VERT, 'MOD_DECL', decl);
   vert = inject(vert, 'MOD_VERT', block(list(mods.vert)));
-  let frag = inject(VOXEL_FRAG, 'MOD_DECL', decl);
+  let frag = inject(swapDeriv(VOXEL_FRAG), 'MOD_DECL', decl);
   frag = inject(frag, 'MOD_FRAG', block(list(mods.frag)));
   frag = inject(frag, 'MOD_FINAL', block(list(mods.fragFinal)));
   return { vertexShader: vert, fragmentShader: frag };
 }
 
-export function createVoxelMaterials(atlas, mods = {}) {
+export function createVoxelMaterials(atlas, mods = {}, opts = {}) {
+  const derivatives = opts.derivatives !== false;
   // `lights: true` обязывает материал нести light-униформы: THREE не подмешивает
   // UniformsLib.lights в ShaderMaterial сам, а WebGLRenderer на каждом кадре пишет
   // uniforms.directionalLights.value = … — без этих ключей первый же кадр с
@@ -354,7 +378,7 @@ export function createVoxelMaterials(atlas, mods = {}) {
   // Код модов вставляется один раз при создании материалов: три не пересобирает
   // программу по смене исходника, поэтому «применить мод с новым шейдером» =
   // пересоздать материалы (Game.applyModShaders), либо перезагрузка.
-  const SHADERS = buildVoxelShaders(mods);
+  const SHADERS = buildVoxelShaders(mods, { derivatives });
   const modUniforms = mods.uniforms
     ? Object.fromEntries(Object.entries(mods.uniforms).map(([k, v]) => [k, { value: v }]))
     : {};
@@ -402,8 +426,11 @@ export function createVoxelMaterials(atlas, mods = {}) {
       lights: true,
     });
     // dFdx/dFdy нужны для нормалей из производных. three добавит
-    // #extension GL_OES_standard_derivatives сам (см. WebGLProgram).
-    mat.extensions = { derivatives: true };
+    // #extension GL_OES_standard_derivatives сам (см. WebGLProgram). Если
+    // расширения нет (WebGL1 на старом GPU), шейдер собран без производных —
+    // просить несуществующее расширение означает «программа не собралась»,
+    // а не «мир без одной красоты»: меши мира просто не отрисуются вовсе.
+    mat.extensions = { derivatives };
     // общие униформы должны быть одни и те же объекты
     for (const k of Object.keys(shared)) mat.uniforms[k] = shared[k];
     return mat;

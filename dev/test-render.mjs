@@ -428,5 +428,34 @@ const read = async (rel) => {
   else ok('рамка выделения показывается только там, где блок уже нарисован');
 }
 
+// ── 11. производные: материал обязан собираться и без GL_OES_standard_derivatives
+// Это ровно тот случай, который превращал мир в «прозрачный»: одна неподдерживаемая
+// возможность в общем материале = несобранная программа = ни одного нарисованного
+// меша (небо, облака, рука и рамка цели живут на своих материалах и остаются).
+{
+  const { buildVoxelShaders, createVoxelMaterials, VOXEL_FRAG } = await import('../src/render/voxelMaterial.js');
+  const calls = (x) => (x.match(/\bdF(?:dx|dy)\s*\(|\bfwidth\s*\(/g) || []).length;
+  const withD = buildVoxelShaders({});
+  const noD = buildVoxelShaders({}, { derivatives: false });
+  if (calls(withD.fragmentShader) !== 2) bad(`в обычном материале вызовов производных ${calls(withD.fragmentShader)}, ожидалось 2 (нормаль грани из vWorld)`);
+  if (calls(noD.fragmentShader) !== 0) bad('в варианте без расширения остались вызовы dFdx/dFdy — на WebGL1 без OES_standard_derivatives программа не соберётся');
+  if (calls(noD.vertexShader) !== 0) bad('в вершинном шейдере появились производные');
+  if (!/lit0 = 0\.72 \+ 0\.5 \* clamp\(sky \* 1\.15/.test(noD.fragmentShader)) bad('без производных lit0 не считается по vLight.y — солнце перестанет освещать верхние грани');
+  if (noD.fragmentShader.includes('vec3 Vw = normalize(cameraPosition - vWorld)')) bad('разворот нормали к зрителю остался: без dFdx он не для чего');
+  if (VOXEL_FRAG.includes('lit0 = 0.72 + 0.5 * clamp(sky')) bad('замена просочилась в исходный VOXEL_FRAG — «без модов» перестало быть байт-в-байт прежним');
+  for (const inc of ['<common>', '<packing>', '<lights_pars_begin>', '<shadowmap_pars_fragment>', '<shadowmask_pars_fragment>']) {
+    if (!noD.fragmentShader.includes(`#include ${inc}`)) bad(`в варианте без производных потерян чанк <${inc}> — тени перестали бы считаться`);
+  }
+  if (!/getShadowMask\(\)/.test(noD.fragmentShader)) bad('в варианте без производных пропал getShadowMask() — запасной путь не должен резать тени');
+  const atlas = { texture: new THREE.Texture() };
+  const a = createVoxelMaterials(atlas, {}, { derivatives: false });
+  if (a.solid.extensions.derivatives !== false) bad('material.extensions.derivatives не снят — three всё равно вставит #extension в шейдер');
+  if (a.water.extensions.derivatives !== false) bad('у воды флаг не согласован с сушей (общая программа — значит общая и заявка)');
+  const b = createVoxelMaterials(atlas);
+  if (b.solid.extensions.derivatives !== true) bad('по умолчанию расширение надо запрашивать: картинка 0.4.2 меняться не должна');
+  if (b.solid.fragmentShader !== withD.fragmentShader) bad('вызов без opts собрал другой шейдер, чем buildVoxelShaders({})');
+  ok(`производные: два варианта материала (вызовов ${calls(withD.fragmentShader)} против ${calls(noD.fragmentShader)}), флаг за вариантом, тени на месте`);
+}
+
 console.log(fail ? `\nЕсть провалы: ${fail}` : '\nрендер и контент в порядке');
 process.exit(fail ? 1 : 0);

@@ -71,7 +71,12 @@ export class Game {
     try {
       this.atlasAniso = this.atlas.setMaxAnisotropy(this.renderer.capabilities?.getMaxAnisotropy?.() ?? 1);
     } catch { this.atlasAniso = 1; }
-    this.materials = createVoxelMaterials(this.atlas, modShaderChunks());
+    // Расширение GL_OES_standard_derivates нужно нашему материалу для нормалей из
+    // dFdx. На WebGL1 без него шейдер не компилируется, а не скомпилированный
+    // материал = не нарисован НИ ОДИН меш мира (небо и рука живут на своих).
+    // Поэтому спрашиваем драйвер один раз и собираем материал по ответу.
+    this._canDeriv = Game.supportsDerivatives(this.renderer);
+    this.materials = createVoxelMaterials(this.atlas, modShaderChunks(), { derivatives: this._canDeriv });
     this.watchVoxelProgram();   // если программа мода не соберётся — мир обязан остаться видимым
     this._shaderTier = 0;
     this.installShaderLadder(); // а если не собрался любой из них — ступень вниз, не пустой экран
@@ -1439,7 +1444,7 @@ export class Game {
       this.hud.toast('Мод меняет блоки или текстуры — нужна перезагрузка страницы (F5)', 'warn');
       return false;
     }
-    const mats = createVoxelMaterials(this.atlas, modShaderChunks());
+    const mats = createVoxelMaterials(this.atlas, modShaderChunks(), { derivatives: this._canDeriv !== false });
     this.materials.solid.dispose();
     this.materials.water.dispose();
     this.materials = mats;
@@ -1874,6 +1879,20 @@ export class Game {
 }
 
 
+
+/** Есть ли у драйвера производные: на WebGL2 они ядро, на WebGL1 — расширение.
+ * Свой вопрос «а вдруг getExtension кинет» важнее экономии: undefined считаем
+ * «есть», чтобы не угробить картинку на нормальном устройстве из-за заглушки. */
+Game.supportsDerivatives = function supportsDerivatives(renderer) {
+  try {
+    if (renderer?.capabilities?.isWebGL2) return true;
+    const gl = renderer?.getContext?.();
+    if (!gl || typeof gl.getExtension !== 'function') return true;
+    return !!gl.getExtension('OES_standard_derivatives');
+  } catch {
+    return true;
+  }
+};
 
 export function boot(deps = {}) {
   // Моды раньше игры: тайлы → блоки → рецепты → шейдеры (см. game/mods.js).
