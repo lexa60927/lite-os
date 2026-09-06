@@ -11,7 +11,14 @@ import { BLOCKS } from './blocks.js';
 import { OPAQUE, RENDER, HIDE_SAME, CUTOUT, FULL_BRIGHT, LIGHT, INSET, TINTED, WATER_TINT, PLANT_H, R_CUBE, R_LIQUID, R_CROSS, R_TORCH } from './props.js';
 import { BIOME_TINT, BIOME_WATER_TINT } from './gen.js';
 
-export const F_TOP = 0, F_BOTTOM = 1;
+/**
+ * Индексы граней в FACES. Порядок там: +X, -X, +Y, -Y, +Z, -Z — то есть верх
+ * это 2, а низ 3. Раньше здесь стояло 0 и 1, и это тихо ломало ВСЕ блоки с
+ * разными тайлами по осям: верх травы получал боковой тайл, ствол дерева —
+ * кольца с вершины, снег — землю, а «волна» воды навешивалась на боковые грани
+ * вместо поверхности (полосатое белое пятно на озере).
+ */
+export const F_TOP = 2, F_BOTTOM = 3;
 
 /** Порядок вершин: cross(v1-v0, v2-v0) сонаправлен с dir (CCW снаружи). */
 export const FACES = [

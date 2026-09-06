@@ -21,10 +21,12 @@ import { PLANT_H } from '../src/engine/props.js';
 import { DataTexture } from 'three';
 
 let fail = 0;
+const tilesByIndex = new Map();
 const bad = (msg) => { console.log('✘ ' + msg); fail++; };
 const ok = (msg) => console.log('✔ ' + msg);
 
 const { tiles, index } = buildTiles();
+for (const t of tiles) tilesByIndex.set(t.index, t.name);
 const packed = packAtlas(tiles);
 const px = (atlasX, atlasY) => {
   const k = (atlasY * packed.width + atlasX) * 4;
@@ -136,6 +138,111 @@ if (new DataTexture().flipY !== false) {
       if (Math.abs(vAtMax - rect.v0) > 1e-5) bad('растение: верх квада не совпадает с v0 тайла');
       if (Math.abs(vAtMin - (rect.v0 + rect.s)) > 1e-5) bad('растение: низ квада не совпадает с v0+s (арт срезан)');
     }
+  }
+}
+
+// ── 6. каждая грань обязана брать СВОЙ тайл (ловит съехавшие F_TOP/F_BOTTOM) ─
+// Порядок FACES — +X, -X, +Y, -Y, +Z, -Z, поэтому верх это 2, а низ 3. Если эти
+// константы разъедутся, мир не почернеет и тесты ориентации пройдут: просто у
+// травы верх станет боковым тайлом, у ствола — кольцами с макушки, а «волна»
+// воды переедет на боковые грани. Ровно так и было, пока это не стало видно на
+// скриншотах. Поэтому здесь сверяется именно ИМЯ тайла под UV каждой грани.
+{
+  const G = 40;
+  const size = CELL * GRID;
+  const blocks = new Uint8Array(CHUNK * CHUNK * HEIGHT);
+  for (let z = 0; z < CHUNK; z++) for (let x = 0; x < CHUNK; x++) {
+    blocks[idx(x, G, z)] = byKey('grass');
+    blocks[idx(x, G - 1, z)] = byKey('stone');
+  }
+  const log = byKey('log'), snow = byKey('snow'), water = byKey('water');
+  for (let dy = 1; dy <= 3; dy++) blocks[idx(8, G + dy, 8)] = log;   // ствол: бока — кора, торец — кольца
+  blocks[idx(2, G + 1, 2)] = snow;
+  blocks[idx(12, G + 1, 12)] = water;
+  const chunk = { cx: 0, cz: 0, blocks, biomes: new Uint8Array(CHUNK * CHUNK), skyH: new Uint8Array(CHUNK * CHUNK).fill(G + 6), light: null, hmax: G + 6 };
+  const world = {
+    terrain: { col: () => ({ h: G }) },
+    getChunk: (cx, cz) => (cx === 0 && cz === 0 ? chunk : null),
+    getBlock: (x, y, z) => (x >= 0 && x < CHUNK && z >= 0 && z < CHUNK && y >= 0 && y < HEIGHT ? blocks[idx(x, y, z)] : 0),
+    isOpaque: (x, y, z) => world.getBlock(x, y, z) !== 0, skyAt: (x, y, z) => (y >= G + 4 ? 1 : 0.5), lightAt: () => 0,
+  };
+  const nameOfUv = (uu, vv) => {
+    const col = Math.min(GRID - 1, Math.max(0, Math.floor((uu * size) / CELL)));
+    const row = Math.min(GRID - 1, Math.max(0, Math.floor((vv * size) / CELL)));
+    return tilesByIndex.get(row * GRID + col) ?? '?';
+  };
+  const mesh = buildChunkMesh(world, chunk, { index, cell: CELL, tile: TILE, grid: GRID });
+  const wantTile = (id, face) => {
+    const t = BLOCKS[id].tiles;
+    return (face === 'top' ? (t.top ?? t.all) : face === 'bottom' ? (t.bottom ?? t.all) : (t.side ?? t.all)) ?? null;
+  };
+  const seen = new Map();     // «ключ/грань» -> {need, got:Set, n}
+  const wave = { top: -1, side: -1 };
+  for (const kind of ['solid', 'water']) {
+    const buf = mesh[kind];
+    if (!buf || !buf.quads) continue;
+    const p = buf.position, u = buf.uv, li = buf.light;
+    for (let q = 0; q < buf.quads; q++) {
+      const b = q * 4;
+      let minX = 9e9, maxX = -9e9, minY = 9e9, maxY = -9e9, minZ = 9e9, maxZ = -9e9, minU = 9e9, minV = 9e9;
+      for (let k = 0; k < 4; k++) {
+        const x = p[(b + k) * 3], y = p[(b + k) * 3 + 1], z = p[(b + k) * 3 + 2];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        const uu = u[(b + k) * 2], vv = u[(b + k) * 2 + 1];
+        if (uu < minU) minU = uu; if (vv < minV) minV = vv;
+      }
+      const spanX = maxX - minX, spanY = maxY - minY, spanZ = maxZ - minZ;
+      let face, owner;
+      if (spanY < 0.01) {
+        const plane = Math.round(minY);
+        const gx = Math.floor(minX + 0.1), gz = Math.floor(minZ + 0.1);
+        const above = world.getBlock(gx, plane, gz), below = world.getBlock(gx, plane - 1, gz);
+        if (below && !above) { face = 'top'; owner = [gx, plane - 1, gz]; }
+        else if (above && !below) { face = 'bottom'; owner = [gx, plane, gz]; }
+        else continue;
+      } else if (spanX < 0.01) {
+        const plane = Math.round(minX);
+        const y = Math.floor((minY + maxY) / 2), gz = Math.floor(minZ + 0.1);
+        const l = world.getBlock(plane - 1, y, gz), r = world.getBlock(plane, y, gz);
+        if (l && !r) { face = 'side'; owner = [plane - 1, y, gz]; }
+        else if (r && !l) { face = 'side'; owner = [plane, y, gz]; }
+        else continue;
+      } else if (spanZ < 0.01) {
+        const plane = Math.round(minZ);
+        const y = Math.floor((minY + maxY) / 2), gx = Math.floor(minX + 0.1);
+        const l = world.getBlock(gx, y, plane - 1), r = world.getBlock(gx, y, plane);
+        if (l && !r) { face = 'side'; owner = [gx, y, plane - 1]; }
+        else if (r && !l) { face = 'side'; owner = [gx, y, plane]; }
+        else continue;
+      } else continue;
+      const id = world.getBlock(...owner);
+      if (!id) continue;
+      const need = wantTile(id, face);
+      if (!need) continue;
+      const key = `${BLOCKS[id].key}/${face}`;
+      const rec = seen.get(key) ?? { need, got: new Set(), n: 0 };
+      rec.got.add(nameOfUv(minU, minV));
+      rec.n++;
+      seen.set(key, rec);
+      if (id === water) {
+        const w = li ? li[(b + 0) * 4 + 3] : 0;   // light.w: флаг «эта грань колышется»
+        if (face === 'top') wave.top = w; else if (wave.side < 0) wave.side = w;
+      }
+    }
+  }
+  let wrong = 0;
+  for (const [key, r] of seen) {
+    const got = [...r.got];
+    if (got.length !== 1 || got[0] !== r.need) { wrong++; bad(`${key}: ${r.n} граней(и) с UV ${got.join(',')} — ожидался тайл ${r.need}`); }
+  }
+  if (!wrong) ok(`тайлы по граням: ${[...seen].map(([k, r]) => `${k}→${r.need}`).join(', ')}`);
+  if (mesh.water && mesh.water.quads) {
+    if (!(wave.top > 0.5)) bad('вода: у верхней грани не стоит флаг волны (light.w) — поверхность будет плоской');
+    else ok('вода: волна навешана на верхнюю грань');
+    if (wave.side > 0.5) bad('вода: флаг волны есть на боковой грани — берег будет дрожать и светиться полосой');
+    else ok('вода: боковые грани спокойны');
   }
 }
 
