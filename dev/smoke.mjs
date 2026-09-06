@@ -109,17 +109,105 @@ p.vy = 0;
 console.log(`✔ бег/полёт: смещение в полёте ${flyMoved.toFixed(2)} блока за 0.75 с`);
 if (flyMoved < 3) throw new Error(`в полёте почти не двигается (${flyMoved.toFixed(2)})`);
 
-// --- прыжок и полёт ---
+// --- прыжок и полёт: полёт — только в творчестве ---
 game.keys.add('Space');
 await dom.__pumpFrames(12);
 game.keys.delete('Space');
 const yJump = p.y;
 await dom.__pumpFrames(20);
+// режим трогаем напрямую (setCreative добирает хотбар и сломал бы дальнейшие проверки)
+const wasCreative = game.inv.creative;
+game.inv.creative = false;
+game.toggleFly();
+await dom.__pumpFrames(4);
+console.log(`${!p.flying ? '✔' : '✘'} в выживании полёт запрещён (flying=${p.flying})`);
+if (p.flying) throw new Error('в выживании включился полёт');
+game.inv.creative = true;
 game.toggleFly();
 await dom.__pumpFrames(30);
-console.log(`✔ прыжок (y ${yJump.toFixed(2)}), полёт включён: ${p.flying}`);
-if (!p.flying) throw new Error('полёт не включился');
+console.log(`✔ прыжок (y ${yJump.toFixed(2)}), в творчестве полёт включён: ${p.flying}`);
+if (!p.flying) throw new Error('в творчестве полёт не включился');
 game.toggleFly();
+
+// автоповтор зажатой клавиши не должен переключать полёт и плодить тосты:
+// ровно так рождался «дождь» из 12 сообщений «Полёт: вкл/выкл» на скриншоте
+game.inv.creative = true;
+game.keys.clear();
+game.keys.add('KeyW');
+const toastBox = game.hud.el.toasts;
+while (toastBox.children.length) toastBox.removeChild(toastBox.children[0]);   // мешают старые сообщения
+const key = (code, repeat) => ({ code, repeat, target: null, preventDefault() {}, stopPropagation() {} });
+for (let i = 0; i < 40; i++) game.onKey(key('Space', true), true);
+game.onKey(key('KeyW', true), true);
+await dom.__pumpFrames(2);
+const wHeld = game.keys.has('KeyW');
+game.keys.delete('KeyW');   // иначе игрок поедет вперёд и следующие проверки промахнутся
+const spam = toastBox.children.length;
+// но обычное двойное нажатие без повтора обязано работать как раньше
+game.onKey(key('Space', false), true);
+game.onKey(key('Space', false), true);
+const dblWorks = p.flying === true;
+game.onKey(key('Space', false), false);   // отпускаем: иначе игрок продолжит прыгать и следующие проверки поплывут
+game.toggleFly();
+while (toastBox.children.length) toastBox.removeChild(toastBox.children[0]);
+console.log(`${!p.flying && spam === 0 && wHeld && dblWorks ? '✔' : '✘'} автоповтор Space игнорируется (новых тостов ${spam}), двойное нажатие работает: ${dblWorks}, удержанная W в keys: ${wHeld}`);
+if (p.flying) throw new Error('автоповтор клавиши включил полёт');
+if (spam > 0) throw new Error(`автоповтор наплодал тостов: ${spam}`);
+if (!dblWorks) throw new Error('двойное нажатие Space перестало включать полёт');
+if (!wHeld) throw new Error('защита от автоповора выкидывает удерживаемые клавиши движения');
+if (spam > 1) throw new Error(`автоповтор наплодил тостов: ${spam}`);
+// одинаковые сообщения не стакаются, а разные не занимают больше 6 мест
+for (let i = 0; i < 12; i++) game.hud.toast('Полёт: вкл');
+const same = toastBox.children.filter((c) => c.__toastKey === 'Полёт: вкл').length;
+for (let i = 0; i < 12; i++) game.hud.toast(`уникальное ${i}`);
+const total = toastBox.children.length;
+console.log(`${same === 1 && total <= 6 ? '✔' : '✘'} тосты: дубль показан ${same} раз, всего в стопке ${total}`);
+if (same !== 1) throw new Error('одинаковые тосты стакаются в стопку');
+if (total > 6) throw new Error(`стопка тостов не ограничена: ${total}`);
+game.inv.creative = wasCreative;
+
+// --- урон от падения: больно, но с обычной горы не смертельно ---
+{
+  const gy = Math.floor(p.y);
+  const hp0 = game.state.hp;
+  const dropFrom = (h) => {
+    game.state.hp = 20;
+    p.flying = false; p.vy = 0; p.fallDamage = 0;
+    p.spawn(p.x + 0.5 > Math.floor(p.x) + 0.5 ? p.x : p.x, gy + h, p.z);
+    p._airMax = null; p.fallStart = null; p.onGround = false;
+    for (let i = 0; i < 400; i++) { p.update(1 / 60, { forward: 0, back: 0, left: 0, right: 0, jump: 0, sneak: 0, sprint: 0 }); if (p.fallDamage > 0.001) break; }
+    const d = p.fallDamage; p.fallDamage = 0;
+    return Math.floor(d);   // именно столько снимает игра: main.js берёт целые HP
+  };
+  const dSmall = dropFrom(3);      // спрыгнул с уступа
+  const dMid = dropFrom(20);       // вылетел из дупла дерева
+  const dBig = dropFrom(40);       // сорвался с горы
+  console.log(`${dSmall === 0 && dMid > 0 && dMid <= 9 && dBig >= 10 && dBig < 20 ? '✔' : '✘'} падение: 3 бл → ${dSmall} HP, 20 бл → ${dMid} HP, 40 бл → ${dBig} HP (старая формула: 20 бл = 16 HP, 25 бл = смерть)`);
+  if (dSmall !== 0) throw new Error(`безобидный спрыг даёт урон ${dSmall}`);
+  if (!(dMid > 0 && dMid <= 9)) throw new Error(`падение с 20 блоков: ${dMid} HP — должно быть больно, но живым`);
+  if (!(dBig >= 10 && dBig < 20)) throw new Error(`падение с 40 блоков: ${dBig} HP — должно оставлять шанс выжить`);
+  game.state.hp = hp0;
+  game.hud.setHealth(hp0);
+}
+
+// --- режим нового мира: переключатель в меню → settings → инвентарь ---
+{
+  const wasSettings = game.settings.creative;
+  game.menuMode = 'creative';
+  game.applyMenuMode();
+  const on = !!game.settings.creative;
+  const invCreative = (() => { game.setupInventory(undefined, null); return game.inv.creative; })();
+  // а существующий мир живёт своим режимом — сохранённым
+  game.setupInventory(false, null);
+  const savedKeeps = game.inv.creative === false;
+  console.log(`${on && invCreative && savedKeeps ? '✔' : '✘'} режим из меню доходит до мира, сохранённый не перетирается`);
+  if (!on) throw new Error('переключатель режима не пишет в settings');
+  if (!invCreative) throw new Error('новый мир не перешёл в творчество');
+  if (!savedKeeps) throw new Error('режим из сохранения перетирается настройкой');
+  game.settings.creative = wasSettings;
+  game.setupInventory(wasSettings, null);
+  game.menuMode = wasSettings ? 'creative' : 'survival';
+}
 
 // --- копка блока под прицелом (стоим на площадке, смотрим вниз) ---
 p.pitch = -1.4;
@@ -347,8 +435,10 @@ game.hitByMob(3, { x: p.x + 1, z: p.z, def: { name: 'тест' } });
 console.log(`${game.state.hp < hpBefore ? '✔' : '✘'} моб бьёт игрока: HP ${hpBefore} → ${game.state.hp}`);
 if (!(game.state.hp < hpBefore)) throw new Error('урон от моба не применяется');
 game.inv.creative = true;
+const hpCreative = game.state.hp;
 game.hitByMob(5, { x: p.x + 1, z: p.z, def: { name: 'тест' } });
-console.log(`${game.state.hp === hpBefore - 3 || true ? '✔' : '✘'} в творчестве урон не страшен`);
+console.log(`${game.state.hp === hpCreative ? '✔' : '✘'} в творчестве урон не страшен: HP ${hpCreative} → ${game.state.hp}`);
+if (game.state.hp !== hpCreative) throw new Error('в творчестве моб всё-таки снимает здоровье');
 game.inv.creative = false;
 
 // --- бесконечный мир: далеко от спавна всё генерируется ---

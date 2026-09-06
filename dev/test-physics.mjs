@@ -49,3 +49,19 @@ console.log('рейкаст в небо:', miss);
 // установка блока не должна вмуровывать игрока
 p.spawn(0.5, 41, 0.5);
 console.log('intersectsBlock(0,41,0)=', p.intersectsBlock(0,41,0), ' intersectsBlock(5,41,0)=', p.intersectsBlock(5,41,0));
+
+// --- кривая урона от падения: спрыгнул с уступа — чисто, с дерева — больно, с горы — на грани
+{
+  const { fallDamageOf } = await import('../src/game/player.js');
+  const rows = [[0, 0], [3, 0], [4, 0], [10, 3], [20, 8], [40, 18], [60, 28]];
+  let ok = true;
+  for (const [drop, want] of rows) {
+    const got = fallDamageOf(drop);
+    if (Math.abs(got - want) > 1e-9) { ok = false; console.log(`✘ ${drop} блоков → ${got}, ожидалось ${want}`); }
+  }
+  const mono = [5, 10, 20, 30].every((d, i, a) => i === 0 || fallDamageOf(d) > fallDamageOf(a[i - 1]));
+  console.log(`${ok && mono ? '✔' : '✘'} урон от падения: 4 бл = ${fallDamageOf(4)}, 10 = ${fallDamageOf(10)}, 20 = ${fallDamageOf(20)}, 40 = ${fallDamageOf(40)} HP (смерть с ~44; раньше — с 24)`);
+  if (!ok) throw new Error('неверная кривая урона от падения');
+  if (!mono) throw new Error('урон не растёт с высотой');
+  if (fallDamageOf(20) >= 20) throw new Error('падение с 20 блоков по-прежнему убивает');
+}

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#1b2126" />
   <title>LiteCraft — воксельный мир</title>
-  <script type="module" crossorigin src="./assets/index-BtHuYM0o.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-BwxqMV3W.css">
+  <script type="module" crossorigin src="./assets/index-5DmA0rC6.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-B3gmor9c.css">
 </head>
 <body>
   <div id="app">
@@ -53,6 +53,16 @@
           </label>
           <button id="rnd-seed" class="btn ghost" title="Случайный сид">🎲</button>
         </div>
+        <div class="row">
+          <label class="field">
+            <span>Режим нового мира</span>
+            <div class="seg" id="mode">
+              <button data-v="survival" class="on">Выживание</button>
+              <button data-v="creative">Творчество</button>
+            </div>
+          </label>
+        </div>
+        <p class="muted mode-hint" id="mode-hint">Выживание: всё добывается руками и тратится, урон работает, полёт выключен.</p>
         <div class="row buttons">
           <button id="play" class="btn primary">Играть</button>
           <button id="open-settings" class="btn ghost">Настройки</button>

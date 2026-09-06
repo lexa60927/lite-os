@@ -184,6 +184,7 @@ details.controls summary { cursor: pointer; color: var(--muted); font-size: 13px
   border: 2px solid rgba(255,255,255,0.2); font-size: 20px;
 }
 .tbtn.active { background: var(--accent-2); border-color: #fff; }
+.tbtn.dim { opacity: .42; }
 
 @media (max-width: 720px) {
   .slot { width: 40px; height: 40px; }
@@ -245,6 +246,8 @@ details.controls summary { cursor: pointer; color: var(--muted); font-size: 13px
 .net-cols { display: flex; gap: 10px; align-items: flex-end; }
 .net-cols .field { flex: 1; }
 .field.wide { flex: 2.4; }
+/* подпись под переключателем режима: коротко и без претензий на макет */
+.mode-hint { margin: -2px 0 8px; font-size: 11.5px; line-height: 1.45; }
 #net textarea {
   width: 100%; min-height: 74px; resize: vertical; padding: 6px 8px;
   font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;

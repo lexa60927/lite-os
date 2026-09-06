@@ -151,16 +151,47 @@ export class Hud {
     if (el.textContent !== s) el.textContent = s;
   }
 
+  /**
+   * Всплывающее сообщение. Одинаковый текст не плодит стопку: без этого спам от
+   * автоповтора клавиши («Полёт: вкл» по 12 штук) закрывал половину экрана.
+   * Повтор только перезапускает таймер уже висящего сообщения, а всего на экране
+   * держим не больше шести — самое старое вытесняем сразу.
+   */
   toast(text, kind = '') {
+    const box = this.el.toasts;
+    if (!box) return;
+    const key = String(text);
+    for (const c of box.children ?? []) {
+      if (c.__toastKey === key) { this._toastArm(c); return; }
+    }
     const d = document.createElement('div');
     d.className = `toast ${kind}`;
     d.textContent = text;
-    this.el.toasts.appendChild(d);
-    setTimeout(() => {
+    d.__toastKey = key;
+    box.appendChild(d);
+    while ((box.children?.length ?? 0) > 6) box.removeChild(box.children[0]);
+    this._toastArm(d);
+  }
+
+  _toastArm(d) {
+    clearTimeout(d.__t);
+    d.style.opacity = '';
+    d.__t = setTimeout(() => {
       d.style.transition = 'opacity .4s';
       d.style.opacity = '0';
-      setTimeout(() => d.remove(), 420);
+      d.__t = setTimeout(() => d.remove(), 420);
     }, 2400);
+  }
+
+  /** Полёт доступен — иначе сенсорная кнопка ✈ затемняется (нажать можно: подскажет причину). */
+  setFlyAvailable(on) {
+    const b = document.getElementById('t-fly');
+    if (b?.classList) b.classList.toggle('dim', !on);
+  }
+
+  /** Активная кнопка в переключателе-сегменте (.seg с data-v у кнопок). */
+  seg(el, value) {
+    for (const b of el?.children ?? []) b.classList?.toggle('on', (b.dataset?.v ?? b.__v) === value);
   }
 
   // -------------------------------------------------------------- хотбар

@@ -109,6 +109,7 @@ export class Game {
     this.netRtcWait = null;  // 'answer' — ждём ли ответ на наше приглашение
     this.netPanelOpen = false;
     this._netHudT = 0;
+    this.menuMode = this.settings.creative ? 'creative' : 'survival';
     this.avatars = new PeerAvatars(this.scene);
     this.applySettings(null, true);
     this.bindUI();
@@ -118,6 +119,7 @@ export class Game {
     addEventListener('resize', () => this.resize());
     this.hud.show('menu');
     this.refreshWorlds();
+    this.bindModeSeg();
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.state.running) this.pause(); });
     requestAnimationFrame((t) => this.frame(t));
   }
@@ -200,6 +202,9 @@ export class Game {
   }
 
   applySettings(key, value) {
+    // режим из настроек — тот же самый режим, что и в меню: применяем сразу,
+    // а не «после перезагрузки», иначе одна и та же галка значит разное
+    if (key === 'creative') { this.setCreative(!!value); return; }
     if (key && value !== null) {
       this.settings[key] = value;
       saveSettings(this.settings);
@@ -503,7 +508,49 @@ export class Game {
   startFromMenu() {
     const raw = this.hud.el.seed.value.trim();
     const seed = raw === '' ? ((Math.random() * 1e9) | 0) : seedFromString(raw);
+    this.applyMenuMode();
     this.start(seed);
+  }
+
+  /**
+   * Режим нового мира из переключателя в меню. Пишется в settings.creative —
+   * именно оттуда setupInventory берёт режим, когда в сохранении его нет, так
+   * что новый мир создаётся сразу выбранным, а существующий (у которого режим
+   * записан в_save) остаётся таким, каким его создали.
+   */
+  applyMenuMode() {
+    const creative = this.menuMode === 'creative';
+    if (this.settings.creative !== creative) {
+      this.settings.creative = creative;
+      saveSettings(this.settings);
+    }
+    return creative;
+  }
+
+  /** Переключатель «Выживание / Творчество» на главном экране. */
+  bindModeSeg() {
+    const el = document.getElementById('mode');
+    if (!el || this._modeBound) return;
+    this._modeBound = true;
+    for (const b of el.children ?? []) {
+      b.onclick = () => {
+        this.menuMode = (b.dataset?.v === 'creative') ? 'creative' : 'survival';
+        this.syncModeSeg();
+        this.audio.ui('click');
+      };
+    }
+    this.syncModeSeg();
+  }
+
+  syncModeSeg() {
+    this.menuMode = this.menuMode === 'creative' ? 'creative' : 'survival';
+    this.hud.seg(document.getElementById('mode'), this.menuMode);
+    const hint = document.getElementById('mode-hint');
+    if (hint) {
+      hint.textContent = this.menuMode === 'creative'
+        ? 'Творчество: полёт (двойной Пробел), все блоки и предметы из палитры, вещи не тратятся.'
+        : 'Выживание: всё добывается руками и тратится, урон работает, полёт выключен.';
+    }
   }
 
   // ---------------------------------------------------------------- запуск
@@ -650,6 +697,10 @@ export class Game {
       if (!down) this.keys.delete(code);
       return;
     }
+    // автоповтор зажатой клавиши — не новое нажатие: из-за него двойной Space
+    // переключал полёт десятки раз в секунду и засыпал весь экран тостами.
+    // Движение не ломается: this.keys уже содержит клавишу с первого onDown.
+    if (e.repeat) return;
     const block = ['Tab', 'F1', 'F3', 'Space', 'KeyE', 'Slash', 'Backquote'].includes(code);
     if (down && block) e.preventDefault();
     if (down) this.keys.add(code); else this.keys.delete(code);
@@ -710,9 +761,17 @@ export class Game {
   }
 
   toggleFly() {
+    // полёт — свойство творчества: иначе «выживание» превращается в свободный
+    // полёт над горами и приземление на 25 блоков становится последним
+    if (!this.inv.creative) {
+      this.hud.toast('Полёт доступен в творчестве — режим выбирается при создании мира', 'warn');
+      this.audio.ui('deny');
+      return;
+    }
     this.player.flying = !this.player.flying;
     if (this.player.flying) this.player.vy = 0;
-    this.hud.toast(this.player.flying ? 'Полёт: вкл (креатив)' : 'Полёт: выкл');
+    else this.player.fallDamage = 0; // выключили в воздухе — не тащим за собой старый урон
+    this.hud.toast(this.player.flying ? 'Полёт: вкл' : 'Полёт: выкл');
     this.audio.ui('click');
   }
 
@@ -743,6 +802,11 @@ export class Game {
   setCreative(on) {
     this.inv.creative = !!on;
     this.state.creative = !!on;
+    // в выживании летать нельзя — снимаем полёт сразу, чтобы игрок не повис
+    if (!on && this.player) { this.player.flying = false; this.player.fallDamage = 0; }
+    this.menuMode = on ? 'creative' : 'survival';
+    this.syncModeSeg();
+    this.hud.setFlyAvailable(this.inv.creative);
     // режим мира — настройка: после перезагрузки страницы он должен остаться
     this.settings.creative = !!on;
     saveSettings(this.settings);
@@ -769,6 +833,7 @@ export class Game {
     }
     this.inv.sel = Math.max(0, Math.min(8, this.inv.sel));
     this.state.creative = creative;
+    this.hud.setFlyAvailable(creative);
   }
 
   /** Выдать предмет (сбор, крафт, дроп). */
@@ -932,6 +997,9 @@ export class Game {
 
   toMenu() {
     this.input.mine = 0; this.input.place = 0; this.keys.clear();
+    // меню открываем с режимом, который был в только чтоигранном мире
+    this.menuMode = this.inv?.creative ? 'creative' : 'survival';
+    this.syncModeSeg();
     this.netPanelOpen = false;
     if (this.net) this.netLeave('вы вышли из мира — комната покинута');
     this.mobs.clear();

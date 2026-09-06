@@ -1,7 +1,7 @@
 {
   "name": "lite-craft",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "LiteCraft — браузерный воксельный клон Minecraft на Three.js",
   "scripts": {
@@ -18,6 +18,10 @@
     "test:stream": "node dev/test-stream.mjs",
     "test:net": "node --experimental-loader ./dev/loaders/css.mjs dev/test-net.mjs",
     "test:villages": "node --experimental-loader ./dev/loaders/css.mjs dev/test-villages.mjs",
+    "test:mesh": "node dev/test-mesh.mjs",
+    "test:textures": "node dev/test-textures.mjs",
+    "test:world": "node dev/test-world.mjs",
+    "test:physics": "node dev/test-physics.mjs",
     "bench:mesh": "node dev/bench-mesh.mjs",
     "net": "node dev/net-server.mjs"
   },

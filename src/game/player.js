@@ -19,11 +19,23 @@ const FLY = 11;
 const FLY_SPRINT = 26;
 const WATER_GRAVITY = 7.5;
 const MAX_FALL = 58;
+// Урон от падения: раньше это был 1 HP за каждый блок сверх 3.2 — ровно как в
+// Minecraft, но наш рельеф (горы до 70+, обрывы по 15-25 блоков) при этом
+// убивал с обычного спрыга. Теперь: безопасные 4 блока, дальше по полсердца за
+// блок — с 20 блоков больно (8 HP), но жив, смертельно примерно с 44.
+const FALL_SAFE_BLOCKS = 4;
+const FALL_HP_PER_BLOCK = 0.5;
 
 const SOLID = new Uint8Array(BLOCKS.length);
 for (let i = 0; i < BLOCKS.length; i++) SOLID[i] = BLOCKS[i].solid ? 1 : 0;
 const LIQUID = new Uint8Array(BLOCKS.length);
 for (let i = 0; i < BLOCKS.length; i++) LIQUID[i] = BLOCKS[i].liquid ? 1 : 0;
+
+/** Урон от падения в HP (0.5 HP = полсердца). Отрицательное расстояние — ноль. */
+export function fallDamageOf(drop) {
+  if (!(drop > FALL_SAFE_BLOCKS)) return 0;
+  return (drop - FALL_SAFE_BLOCKS) * FALL_HP_PER_BLOCK;
+}
 
 export class Player {
   constructor(world) {
@@ -192,7 +204,7 @@ export class Player {
       if (this.vy < 0) {
         this.onGround = true;
         if (!this.flying && !wasGround && this.fallStart !== null) {
-          this.fallDamage = Math.max(0, this.fallStart - this.y - 3.2);
+          this.fallDamage = fallDamageOf(this.fallStart - this.y);
         }
         this.fallStart = this.inWater ? null : this.y;
       } else if (this.vy > 0) this.vy = Math.min(0, this.vy);
@@ -202,7 +214,7 @@ export class Player {
       this.vy = 0;
       if (!wasGround && this._airMax !== null) {
         const drop = this._airMax - this.y;
-        this.fallDamage = this.flying || this.inWater ? 0 : Math.max(0, drop - 3.2);
+        this.fallDamage = this.flying || this.inWater ? 0 : fallDamageOf(drop);
         this.justLanded = drop > 0.7 ? Math.min(2, drop / 7) : 0;
       }
       this._airMax = null;
