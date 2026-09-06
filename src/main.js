@@ -11,7 +11,7 @@ import { createVoxelMaterials } from './render/voxelMaterial.js';
 // Мод-система: loadMods() обязан отработать ДО new Game(), потому что атлас
 // строится один раз в конструкторе и берёт тайлы из tiles.js (см. game/mods.js).
 import {
-  loadMods, shaderChunks as modShaderChunks, hasOre, orePass, modOf, modBlockIds,
+  loadMods, shaderChunks as modShaderChunks, hasOre, hasShaders, orePass, modOf, modBlockIds,
   register as modRegister, normId as normModId,
   snapshot as modSnapshot, saveUserSource, readUserSource, setModEnabled,
   parseSource as parseModSource, setUniform as modSetUniform,
@@ -67,6 +67,7 @@ export class Game {
       this.atlasAniso = this.atlas.setMaxAnisotropy(this.renderer.capabilities?.getMaxAnisotropy?.() ?? 1);
     } catch { this.atlasAniso = 1; }
     this.materials = createVoxelMaterials(this.atlas, modShaderChunks());
+    this.watchVoxelProgram();   // если программа мода не соберётся — мир обязан остаться видимым
     this.sky = new Sky(this.scene);
     // Тени: один directional light с ortho-камерой, следящей за игроком. Сам по
     // себе он ничего не красит (освещённость считает шейдер), только пишет карту.
@@ -1433,9 +1434,59 @@ export class Game {
     this.materials.water.dispose();
     this.materials = mats;
     const swapped = this.chunkView?.setMaterials?.(mats) ?? 0;
+    this.watchVoxelProgram();   // вдруго этот шейдер не соберётся — мир должен вернуться
     if (this.post) { this.post.dispose?.(); this.post = null; }
     this.initPost();
     this.hud.toast(`Шейдеры модов применены: ${swapped} мешей, ${snap.shaderNames.length ? snap.shaderNames.join(', ') : 'без мода'}`, 'ok');
+    return true;
+  }
+
+  /**
+   * Страховка от «мира нет». Воксельный материал общий у всех чанков: стоит его
+   * программе не собраться — а мода на это способны, если он переобъявит имя из
+   * нашего main() — three пишет «THREE.WebGLProgram: Shader Error» в консоль и
+   * МОЛЧА не рисует ни один меш. Небо, облака, рука и рамка цели живут на своих
+   * материалах, поэтому картина выглядит так, будто мир стал прозрачным. Видим
+   * эту ошибку и пересобираем материал без шейдеров модов: игра остаётся игрой,
+   * а виновник назван вслух.
+   */
+  watchVoxelProgram() {
+    // Ставим всегда, а не только «когда моды включены»: мод с шейдером применяют
+    // из настроек на ходу, и ловить его ошибку надо уже тогда. Цена — одна
+    // проверка регуляркой на строке, выводящейся в консоль.
+    if (this._progHook) return;
+    this._progHook = true;
+    const orig = console.error;
+    console.error = (...args) => {
+      orig.apply(console, args);
+      if (this._progFixed) return;
+      const msg = args.map((a) => String(a?.message ?? a ?? '')).join(' ');
+      if (/THREE\.WebGLProgram|Shader Error|Program Info Log/i.test(msg)) {
+        this._progFixed = true;
+        this.revertModShaders();
+      }
+    };
+  }
+
+  /** Вернуть базовый воксельный материал (шейдеры модов выключены на этот запуск;
+   * в хранилище ничего не трогаем — починил код, включил снова). */
+  revertModShaders() {
+    if (this._reverted || !this.atlas) return false;
+    this._reverted = true;
+    const who = modSnapshot().shaderNames || [];
+    let mats;
+    try {
+      mats = createVoxelMaterials(this.atlas, {});
+      this.materials.solid.dispose();
+      this.materials.water.dispose();
+    } catch { return false; }
+    this.materials = mats;
+    mats.setQuality?.(this.settings.shaders | 0);
+    this.chunkView?.setMaterials?.(mats);
+    this.applyLighting();
+    const text = `Шейдеры модов${who.length ? ` «${who.join('», «')}»` : ''} не скомпилировались — включены базовые. Починь код в Настройки → Моды`;
+    this.hud?.toast(text, 'warn');
+    console.warn('LiteCraft:', text);
     return true;
   }
 
@@ -1735,7 +1786,7 @@ export class Game {
     const mins = Math.floor((((this.state.time * 24 + 6) % 24) % 1) * 60);
     const cv = this.chunkView;
     this.hud.setDebug([
-      `LiteCraft · ${this.state.fps.toFixed(0)} FPS${this.settings.fpsLimit > 0 ? ` (лимит ${this.settings.fpsLimit})` : ' (лимит выключен)'} · ${this.state.ms.toFixed(1)} мс · шейдеры: ${['базовые', 'мягкие', 'красивые', 'ультра'][Math.max(0, Math.min(3, this.settings.shaders | 0))]}${this.post?.active ? ' · грейд' : ''}`,
+      `LiteCraft · ${this.state.fps.toFixed(0)} FPS${this.settings.fpsLimit > 0 ? ` (лимит ${this.settings.fpsLimit})` : ' (лимит выключен)'} · ${this.state.ms.toFixed(1)} мс · шейдеры: ${['базовые', 'мягкие', 'красивые', 'ультра'][Math.max(0, Math.min(3, this.settings.shaders | 0))]}${this.post?.active ? ' · грейд' : ''}${hasShaders() ? ` · шейдеров мода: ${(modSnapshot().shaderNames || []).length}` : ''}${this._reverted ? ' · шейдеры мода выключены: не собрались' : ''}`,
       `XYZ ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}  чанк ${cx},${cz}  блок ${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`,
       `биом: ${biome}  ·  время ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}  ·  свет ${(sky.day * 15) | 0}/15`,
       `чанков: ${world.chunkCount} (мешей ${cv?.chunkMeshCount ?? 0}, в очереди ${cv?.stats.pending ?? 0}) · правок: ${world.editedCount} · стриминг ${cv?.stats.ms?.toFixed(1) ?? 0} мс/кадр (${cv?.stats.frameMs?.toFixed(1) ?? '—'} мс кадр)${(() => { const d = cv?.streamDebug?.(); return d && (d.genErr || d.meshErr || d.light > 64) ? ` · сбой: ген ${d.genErr}, меш ${d.meshErr}, свет ${d.light}` : ''; })()}${this.inVillage ? ' · деревня' : ''}`,

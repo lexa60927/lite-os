@@ -475,7 +475,9 @@ function normTiles(tiles) {
 function uniformValue(val) {
   if (typeof val === 'boolean') return val ? 1 : 0;
   if (Array.isArray(val)) {
-    const v = val.map(Number);
+    // NaN в vec-униформе отравляет весь шейдер (gl_Position → NaN, и чанки
+    // просто не рисуются), поэтому не-числа превращаем в 0 — как и на скаляре.
+    const v = val.map((x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; });
     // {x,y}/{x,y,z} вместо THREE.Vector*: three читает именно эти поля, а mods.js
     // не должен тянуть three — тогда его можно тестировать в Node без загрузчика
     if (v.length >= 3) return { x: v[0], y: v[1], z: v[2] ?? 0 };
@@ -593,9 +595,24 @@ export function checkGlsl(code, stage = 'frag') {
       return `униформа «${u}» не существует; есть ${[...OURS_UNIFORMS].join(', ')} и свои из shader.uniforms`;
     }
   }
-  for (const m of src.matchAll(/\b(vec[234]|float|int|bool|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/g)) {
-    const name = m[2];
-    if (RESERVED.has(name)) return `имя «${name}» занято нашим шейдером: его переопределение сломает вывод молча, выбери другое`;
+  // Объявления (в том числе без инициализатора, списком «float a, b;» и определения
+  // функций) — иначе коллизия имени проходила гейт и роняла компиляцию материала.
+  const declRe = /\b(?:const\s+)?(float|int|bool|vec[234]|mat[234])(\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*(?:=|;|\))/g;
+  const reservedHere = stage === 'decl' ? RESERVED_DECL : RESERVED;
+  for (const m of src.matchAll(declRe)) {
+    for (const raw of m[2].split(',')) {
+      const name = raw.trim().replace(/\(.*$/, '').trim();
+      if (reservedHere.has(name)) return `имя «${name}» занято нашим шейдером (оно уже объявлено в том же scope) — переопределение не компилируется, мир исчезнет целиком; выбери другое, например «m${name}»`;
+    }
+  }
+  // Только WebGL2 / недопустимое во вставке: эти строки тоже дают ошибку компиляции.
+  for (const [re, why] of [
+    [/\btexture\s*\(/, 'texture() есть только в WebGL2, а игра собирается на GLSL ES 1.00 — пиши texture2D()/textureCube()'],
+    [/\btextureLod\s*\(/, 'textureLod() — тоже WebGL2, в ES 1.00 его нет'],
+    [/\bgl_(FragDepth|FragCoord|PointCoord|VertexID)\b/, 'системные gl_* в этом шейдере недоступны: цвет только через col'],
+    [/\bprecision\s+(low|medium|high)p?\s+/, 'precision уже задан нашим материалом — не переопределяй его'],
+  ]) {
+    if (re.test(src)) return why;
   }
   for (const bad0 of ['gl_FragColor', 'discard']) {
     if (src.includes(bad0)) return `«${bad0}» во вставке не нужен: результат берётся из col (в post — из c), а discard вырезал бы грань целиком`;
@@ -615,7 +632,36 @@ const OURS_UNIFORMS = new Set(['uTime', 'uMap', 'uQuality', 'uShadow', 'uRefl', 
 // Только те имена, чьё переопределение молча ломает результат: col — вход и выход
 // вставки, c — то же в пост-проходе, world/pos — геометрия, vUv — UV тайла.
 // Остальные локалы мод может называть как хочет: вставка живёт в своём блоке { }.
-const RESERVED = new Set(['col', 'c', 'world', 'pos', 'vUv', 'vWorld', 'gl_FragColor']);
+// Имена, которые уже заняты НАШИМ шейдером в той области видимости, куда попадает
+// вставка мода. Переобъявить их — значит получить «redefinition of ...»: материал
+// не компилируется, и мир исчезает целиком (небо, облака, рука и рамка при этом
+// живут, потому что у них свои материалы). Именно так v0.4.1 и сломался: локаль
+// alpha появилась в общем фраге и столкнулась с «float alpha» в моде пользователя.
+// Отсюда: имена наши, список ниже сверяет dev/test-mods.mjs с реальным текстом
+// шейдера — добавил локал в main() и не зарезервировал → тест красный.
+export const GLSL_RESERVED = new Set([
+  // локалы main() фрагментного шейдера (точки frag и fragFinal)
+  'tex', 'occ', 'sky', 'blk', 'nrm', 'lit0', 'shade', 'sunTerm', 'skyLight', 'lit', 'col', 'lcAlpha', 'sunGate', 'fg',
+  // локалы main() вершинного шейдера (точка vert)
+  'wpos', 'world', 'mv', 'fogD', 'lin', 'expf', 'worldPosition', 'transformedNormal',
+  // финальный грейд (точка post)
+  'c',
+  // varying / attribute — видны во всех вставках
+  'vUv', 'vWorld', 'vTint', 'vFog', 'vLight', 'position', 'normal', 'uv', 'light', 'tint',
+  // наши глобальные функции и хелперы three, которые легко повторить «по ошибке»
+  'main', 'tileIndex', 'aces', 'waterSlope', 'skyLike', 'wave', 'waveAmp',
+  'PI', 'saturate', 'luminance', 'rand', 'pow2', 'max3', 'average', 'getShadowMask',
+  'packDepthToRGBA', 'unpackRGBAToDepth', 'getViewMatrix',
+].map((x) => x.trim()));
+// Для вставки на уровне файла (decl) локалы main() не помеха: там другое scope и
+// затенение разрешено. Там опасно только совпадение с глобальными именами.
+const RESERVED_DECL = new Set([
+  'main', 'vUv', 'vWorld', 'vTint', 'vFog', 'vLight', 'position', 'normal', 'uv', 'light', 'tint',
+  'tileIndex', 'aces', 'waterSlope', 'skyLike', 'wave', 'waveAmp',
+  'PI', 'saturate', 'luminance', 'rand', 'pow2', 'max3', 'average', 'getShadowMask',
+  'packDepthToRGBA', 'unpackRGBAToDepth', 'getViewMatrix',
+]);
+const RESERVED = GLSL_RESERVED;
 
 function hashStr(s) {
   let h = 2166136261;

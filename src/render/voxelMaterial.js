@@ -46,8 +46,11 @@ void main() {
   vUv = uv;
   vLight = light;
   vTint = tint;
-  vec3 p = position;
-  vec4 world = modelMatrix * vec4(p, 1.0);
+  // Имена локалов main() зарезервированы за нами (см. GLSL_RESERVED в game/mods.js):
+  // мод вставляется в этот же scope, и его float p = ... сломало бы компиляцию
+  // всего материала — мир пропал бы целиком. Поэтому имена несклоняемые.
+  vec3 wpos = position;
+  vec4 world = modelMatrix * vec4(wpos, 1.0);
   if (uWave > 0.5 && light.w > 0.5) {
     // «Ультра» (уровень 3): амплитуда волн крупнее и фазы совпадают с
     // waterSlope() во фрагментном шейдере — иначе блик скользил бы не по гребню,
@@ -69,11 +72,11 @@ void main() {
   // поэтому модель может двигать вершину и её успевает увидеть туман и тени.
   /*MOD_VERT*/
   vec4 mv = viewMatrix * world;
-  float d = length(mv.xyz);
+  float fogD = length(mv.xyz);
   // Поздний линейный туман: до uFogStart мир абсолютно чистый, плотнеет только
   // к границе прокрутки — так мир читается большим, а край чанков не виден.
-  float lin = clamp((d - uFogStart) / max(1.0, uFogEnd - uFogStart), 0.0, 1.0);
-  float expf = 1.0 - exp(-uFogDensity * uFogDensity * d * d);
+  float lin = clamp((fogD - uFogStart) / max(1.0, uFogEnd - uFogStart), 0.0, 1.0);
+  float expf = 1.0 - exp(-uFogDensity * uFogDensity * fogD * fogD);
   vFog = clamp(max(lin * lin, expf), 0.0, 1.0);
   gl_Position = projectionMatrix * mv;
   gl_PointSize = 1.0;
@@ -188,7 +191,12 @@ void main() {
   vec3 skyLight = (uAmbient * mix(vec3(1.08, 1.12, 1.2), vec3(1.0), shade)) + sunTerm;
   vec3 lit = skyLight * occ * lit0 + uTorch * blk * (0.25 + 0.75 * occ);
   vec3 col = tex.rgb * vTint * lit;
-  float alpha = uAlpha;         // вода в «ультре» делает её прозрачной по углу взгляда
+  // Альфа — в локаль, чтобы ультра-вода могла сделать её зависимой от угла
+  // взгляда. Имя с префиксом lc: мод объявляет у себя «alpha» рефлекторно, а две
+  // одноимённые локальные переменные в одном scope — это непрокомпелированный
+  // материал, то есть пустой мир вместо мира. Кавычки, а не бэктики: комментарий
+  // лежит внутри шаблонной строки, обратный кавычки её и закрывают.
+  float lcAlpha = uAlpha;
   float sunGate = shade;                        // блики под деревом не нужны
 
   if (uQuality > 0.5 && uWave > 0.5) {
@@ -251,7 +259,7 @@ void main() {
       // песок у берега), вскользь — зеркало. Из-под воды поверхность плотная,
       // иначе вид сквозь неё вверх выглядел бы дырой в мире.
       float clear = 1.0 - smoothstep(0.12, 0.92, facing);
-      alpha = mix(0.92, mix(0.30, 0.92, clear), step(uSea, cameraPosition.y));
+      lcAlpha = mix(0.92, mix(0.30, 0.92, clear), step(uSea, cameraPosition.y));
     } else {
       // ————— ЗЕМЛЯ: тёплый ободок против солнца и лёгкий подсвет неба сверху
       vec3 V = normalize(cameraPosition - vWorld);
@@ -289,7 +297,7 @@ void main() {
   }
   // Вторая точка: уже после дымки — для «экранного» вида (скан-линии, плёнка).
   /*MOD_FINAL*/
-  gl_FragColor = vec4(col, alpha);
+  gl_FragColor = vec4(col, lcAlpha);
 }
 `;
 

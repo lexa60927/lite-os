@@ -370,13 +370,13 @@ const read = async (rel) => {
 {
   const frag = await read('src/render/voxelMaterial.js');
   const checks = [
-    [/float alpha = uAlpha;/.test(frag), 'альфа — локальная, поэтому уровни «выкл/мягкие/красивые» не сдвинулись'],
-    [/gl_FragColor = vec4\(col, alpha\);/.test(frag), 'вывод берёт alpha из переменной'],
+    [/float lcAlpha = uAlpha;/.test(frag), 'альфа — локальная, поэтому уровни «выкл/мягкие/красивые» не сдвинулись'],
+    [/gl_FragColor = vec4\(col, lcAlpha\);/.test(frag), 'вывод берёт прозрачность из переменной'],
     [/if \(uWave > 0\.5 && uQuality < 2\.5\)/.test(frag), 'подделка отражения уровня 2 уступает «ультре» (два mix друг друга гасят)'],
     [/float facing = clamp\(dot\(V, nw\), 0\.0, 1\.0\)/.test(frag), 'есть угол взгляда — из него и прозрачность, и сила зеркала'],
     [/refl \+= uSunColor \* \(pow\(rs, 420\.0\)/.test(frag), 'солнце в отражении — узким диском, а не размытым пятном'],
     [/textureCube\(uProbe, R\)\.rgb, clamp\(uRefl \* \(1\.0 - up \* 0\.8\)/.test(frag), 'куб-проба мира не размывает отражение неба'],
-    [/alpha = mix\(0\.92, mix\(0\.30, 0\.92, clear\), step\(uSea, cameraPosition\.y\)\);/.test(frag), 'взгляд сверху вниз — дно видно; вскользь — зеркало; из-под воды — плотно'],
+    [/lcAlpha = mix\(0\.92, mix\(0\.30, 0\.92, clear\), step\(uSea, cameraPosition\.y\)\);/.test(frag), 'взгляд сверху вниз — дно видно; вскользь — зеркало; из-под воды — плотно'],
     [!/gl_FragColor = vec4\(col, uAlpha\);/.test(frag), 'в шейдере не осталось старой константной альфы'],
   ];
   for (const [cond, msg] of checks) cond ? ok(msg) : bad('не так: ' + msg);

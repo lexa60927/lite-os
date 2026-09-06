@@ -14,12 +14,40 @@
 import {
   register, resetMods, snapshot, loadMods, parseSource, checkGlsl, shaderChunks,
   modUniforms, modBlockIds, modOf, orePass, hasOre, hasShaders, setUniform,
-  setModEnabled, saveUserSource, readUserSource, LIMITS, normId,
+  setModEnabled, saveUserSource, readUserSource, LIMITS, normId, GLSL_RESERVED,
 } from '../src/game/mods.js';
+import { mainLocals, globalNames } from './shader-locals.mjs';
+import { readFileSync } from 'node:fs';
+const mainSrc = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+import { parse as parseGlslRaw } from '@shaderfrog/glsl-parser';
 import { BLOCKS, BY_KEY, AIR } from '../src/engine/blocks.js';
 import { buildTiles, TILE_NAMES } from '../src/engine/tiles.js';
 import { buildVoxelShaders, VOXEL_FRAG, VOXEL_VERT, glslTypeOf } from '../src/render/voxelMaterial.js';
 import { World } from '../src/engine/world.js';
+
+/** Минимальный префикс three + раскрываем его чанки заглушками: цель — проверить,
+ * что OUR текст синтаксически цел (вставка мода не порезала скобки и main). */
+function parseGlsl(src) {
+  const stubs = `
+precision highp float;
+uniform mat4 modelMatrix; uniform mat4 viewMatrix; uniform mat4 projectionMatrix; uniform mat4 modelViewMatrix;
+uniform mat3 normalMatrix; uniform vec3 cameraPosition; uniform bool isOrthographic;
+float getShadowMask() { return 1.0; }
+`;
+  const body = src.replace(/^[ \t]*#include\s*<[^>]+>[ \t]*$/gm, '');
+  return parseGlslRaw(stubs + body, { quiet: true });
+}
+
+// Vec-униформы после нормализации обязаны быть конечными.
+function uniformIsFinite() {
+  const probe = { id: 'nanprobe', name: 'NaN', shader: { uniforms: { uNan: [NaN, 1 / 0, 0.5] }, frag: 'col += vec3(uNan.x, uNan.y, 0.0) * 0.0;' } };
+  register('nanprobe', probe, 'тест');
+  const u = modUniforms();
+  const v = u && u.uNan;
+  const finite = !!(v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z));
+  resetMods();
+  return finite;
+}
 
 let fails = 0;
 const ok = (m) => console.log('  ✔ ' + m);
@@ -544,12 +572,74 @@ console.log('10. снапшот для панели');
   for (const f of fields) if (!(f in snap)) bad('в снапшоте нет поля ' + f);
   if (snap.oreCount !== 1 || snap.shaderNames.join() !== 'Тёплый закат') bad('счётчики снапшота врут');
   if (!has(snap.mods[1].error, 'key')) bad('для битого мода причина нечитаема: ' + snap.mods[1].error);
+  if (uniformIsFinite()) ok('NaN в униформе не проходит'); else bad('NaN в vec-униформе доходит до шейдера — мир исчезнет');
   const json = JSON.parse(JSON.stringify(snap));
   if (!json || typeof json !== 'object') bad('снапшот не сериализуется — HUD бы упал');
   else ok('снапшот сериализуется (его показывает панель и game.mods из консоли)');
   resetMods();
   if (snapshot().mods.length) bad('snapshot после reset не пуст');
   else ok('после reset панель покажет «модов нет»');
+}
+
+// ─── 11. Коллизия имён: наш main() и вставка мода живут в одном scope
+// Именно так v0.4.1 и потеряла мир: в общем фрагментном шейдере появился локал
+// alpha, пользовательский мод объявил свой — GLSL «redefinition of 'alpha'»,
+// программа не собрана, меши чанков не нарисованы НИ ОДНИМ пикселем. Тест
+// сверяет список резерва с реальным текстом шейдера, чтобы такое ловить до сборки.
+{
+  console.log('\n11. Имена: локалы нашего main() зарезервированы');
+  const built = buildVoxelShaders({});
+  const fragLocals = mainLocals(built.fragmentShader);
+  const vertLocals = mainLocals(built.vertexShader);
+  const unreserved = [...fragLocals, ...vertLocals].filter((n) => !GLSL_RESERVED.has(n));
+  if (unreserved.length) bad(`локалы вне резерва (мод с таким именем не скомпилируется): ${unreserved.join(', ')}`);
+  else ok(`все ${new Set([...fragLocals, ...vertLocals]).size} локалов main() зарезервированы`);
+  for (const n of globalNames(VOXEL_FRAG)) {
+    if (!GLSL_RESERVED.has(n)) bad(`глобальное имя «${n}» не в резерве`);
+  }
+  ok('глобальные функции и varying тоже в резерве');
+
+  // Исторический случай: мод, который объявляет alpha, обязан проходить и собираться.
+  const alphaMod = { id: 'alphatest', name: 'Alpha', shader: { frag: 'float alpha = 0.5; col += alpha * 0.0;' } };
+  const rec = register('alphatest', alphaMod, 'тест');
+  if (!rec.ok) bad(`мод со своим alpha отвергнут зря: ${rec.error}`);
+  else ok('своё «float alpha» в моде — законно, шейдер прежний не мешает');
+  const withAlpha = buildVoxelShaders(shaderChunks());
+  const decls = (withAlpha.fragmentShader.match(/^\s*(?:const\s+)?float\s+alpha\b/gm) || []).length;
+  if (decls !== 1) bad(`в собранном фраге имя alpha объявлено ${decls} раз(а), должно 1 — иначе «redefinition»`);
+  else ok('в собранном шейдере alpha объявлена ровно один раз');
+  try { parseGlsl(withAlpha.fragmentShader, 'frag'); ok('шейдер с таким модом читается GLSL-парсером'); }
+  catch (e) { bad('GLSL-парсер отверг шейдер с модом: ' + e.message.split('\n')[0]); }
+  resetMods();
+
+  const rej = [
+    ['float lcAlpha = 1.0;', 'frag', 'lcAlpha'],
+    ['vec4 tex = vec4(1.0);', 'frag', 'tex'],
+    ['float shade;', 'frag', 'shade'],               // без инициализатора — тоже коллизия
+    ['vec3 one, col;', 'frag', 'col'],               // список через запятую
+    ['float worldPosition = 1.0;', 'vert', 'worldPosition'],
+    ['vec4 o; float vWorld = 1.0;', 'frag', 'vWorld'],
+    ['vec4 t = texture(uMap, vUv);', 'frag', 'texture('],
+    ['gl_FragDepth = 0.4;', 'frag', 'gl_FragDepth'],
+    ['precision mediump float;', 'decl', 'precision'],
+  ];
+  for (const [code, stage, why] of rej) {
+    const e = checkGlsl(code, stage);
+    if (!e) bad(`пропустили вставку «${why}» (${stage}) — она не скомпилируется`);
+  }
+  ok(`${rej.length} опасных вставок отсеяны`);
+  for (const [code, stage] of [['float alpha = 0.5;', 'frag'], ['float d = length(mv.xyz);', 'vert'], ['vec3 p = vWorld;', 'frag'], ['float t = uTime;', 'frag'], ['vec2 g = vec2(1.0, 2.0);', 'decl'], ['vec4 o = vec4(col, 1.0);', 'fragFinal']]) {
+    const e = checkGlsl(code, stage);
+    if (e) bad(`законную вставку «${code}» (${stage}) отвергнут: ${e}`);
+  }
+  ok('безобидные имена (alpha, d, p, t, g) больше не режутся — коллизий с нами нет');
+  // Свои функции во вставке запрещены документированно (mods/README.md): рекурсии
+  // в ES 1.0 нет, а зависший драйвер починкой не лечится.
+  if (!checkGlsl('float f(float a) { return a; }', 'decl')) bad('определять функцию внутри вставки надо отклонять');
+  else ok('своя функция во вставке отклонена — как и обещано в mods/README.md');
+  // Страховка игры: собрался ли шейдер мода — решает watchdog в main.js, а не удаляй
+  if (!/watchVoxelProgram|revertModShaders/.test(mainSrc)) bad('в main.js нет watchdog-а «мир пропал» — одна опечатка в моде снова гасит мир');
+  else ok('в игре есть откат на базовый материал при несобранной программе');
 }
 
 console.log(fails ? `\n✘ провалов: ${fails}` : '\nмоды в порядке');

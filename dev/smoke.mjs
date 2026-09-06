@@ -59,6 +59,27 @@ try {
   game.audio.setVolumes(0.3, 0.5);
   game.audio.toggleMusic(); game.audio.toggleMusic();
 } catch (e) { audioErr = e; }
+// --- страховка «мир пропал»: несобранная шейдерная программа мода не должна
+// оставлять пустой мир. Игра умеет сама сесть на базовый материал.
+{
+  const rec = game.registerMod({ id: 'brokenprog', name: 'Сломанный', shader: { frag: 'float vec3 = 1.0; col += vec3;' } });
+  const withMod = game.materials.solid.fragmentShader;
+  if (!rec.ok) throw new Error('мод со шейдером не применился: ' + rec.error);
+  if (!withMod.includes('float vec3 = 1.0')) throw new Error('вставка мода не попала в материал — проверка пуста');
+  const watched = game._progHook === true;
+  const done = game.revertModShaders();
+  const back = game.materials.solid.fragmentShader;
+  const meshesSwap = (() => {
+    for (const r of game.chunkView.objects.values()) { if (r.solid) return r.solid.material === game.materials.solid; }
+    return true;
+  })();
+  const { VOXEL_FRAG, buildVoxelShaders } = await import('../src/render/voxelMaterial.js');
+  const stock = buildVoxelShaders({}).fragmentShader;
+  const clean = back === stock && !back.includes('float vec3');
+  console.log(`${watched && done && back !== withMod && clean && meshesSwap ? '✔' : '✘'} шейдер мода не собирается: сторож поставлен, материал вернулся на базовый, меши переприсвоены (${game.chunkView.chunkMeshCount} мешей)`);
+  if (!watched || !done || back === withMod || !clean) throw new Error(`откат после сбоя шейдера не работает (сторож ${watched}, откат ${done}, differing ${back !== withMod}, чистый ${clean}, меши ${meshesSwap})`);
+}
+
 console.log(`${audioUp && game.audio._musicTimer && !audioErr ? '✔' : '✘'} звук: контекст ${audioUp ? 'есть' : 'нет'}, такт ${game.audio._musicTimer ? 'идёт' : 'нет'}${audioErr ? ' · ошибка ' + audioErr.message : ''}`);
 if (!audioUp || !game.audio._musicTimer) throw new Error(audioErr ?? 'аудио не поднялось');
 game.audio.stopMusic();

@@ -1,7 +1,7 @@
 {
   "name": "lite-craft",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "description": "LiteCraft — браузерный воксельный клон Minecraft на Three.js",
   "scripts": {
@@ -31,6 +31,7 @@
     "three": "0.160.1"
   },
   "devDependencies": {
+    "@shaderfrog/glsl-parser": "^7.0.1",
     "glsl-parser": "^2.0.1",
     "glsl-tokenizer": "^2.1.5",
     "vite": "5.4.11"
