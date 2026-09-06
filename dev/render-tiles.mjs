@@ -1,13 +1,26 @@
 /**
  * Лист тайлов атласа в PNG (увеличение ×3, без bleed-поля), чтобы смотреть
  * текстуры глазами, а не по массивам: `node dev/render-tiles.mjs [out.png]`
+ *
+ * `--mod mods/moy.js` — сначала применить свой мод и только потом собирать лист:
+ * так видно, что тайл мода не чёрный и влез в сетку, не открывая браузер.
  */
 import { deflateSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 import { buildTiles } from '../src/engine/tiles.js';
 import { packAtlas, GRID, TILE, PAD } from '../src/engine/pixels.js';
 
-const out = process.argv[2] ?? '/home/user/tiles-sheet.png';
+const argv = process.argv.slice(2);
+const modAt = argv.indexOf('--mod');
+if (modAt >= 0) {
+  const file = String(argv[modAt + 1] || '');
+  const { register } = await import('../src/game/mods.js');
+  const def = (await import(new URL(`../${file.replace(/^\.?\//, '')}`, import.meta.url))).default;
+  const rec = register(def?.id || 'preview', def, file);
+  if (!rec.ok) { console.error(`✘ мод не принят: ${rec.error}`); process.exit(1); }
+  console.log(`мод применён: тайлы ${rec.applied.tiles.join(', ')}`);
+}
+const out = argv.find((a, i) => !a.startsWith('--') && argv[i - 1] !== '--mod') ?? '/home/user/tiles-sheet.png';
 const S = 3;
 const { tiles } = buildTiles();
 const packed = packAtlas(tiles);

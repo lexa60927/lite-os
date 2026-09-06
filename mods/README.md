@@ -203,10 +203,19 @@ shader: {
 ## Как проверить мод, не открывая браузер
 
 ```bash
+# 1. примет ли реестр (и почему нет)
 node --input-type=module -e "
 const m = (await import('./mods/moy-mod.js')).default;
 const { register } = await import('./src/game/mods.js');
 console.log(JSON.stringify(register(m.id, m), null, 2));"
+
+# 2. как выглядят тайлы — лист атласа в PNG, мод применяется до сборки листа
+node dev/render-tiles.mjs /tmp/tiles.png --mod mods/moy-mod.js
 ```
 
-`ok: false` → в `error` список причин. Тесты игры: `npm run test:mods`.
+`ok: false` → в `error` список причин. Тесты игры: `npm run test:mods`
+(он же сторожит инвариант «без модов игра байт-в-байт прежняя»).
+
+После применения мода сетка атласа сдвигается: ванильных тайлов 88, значит первый
+тайл мода — ячейка 88 (6-й ряд, 9-я колонка). Так что «пропавшая» текстура обычно
+означает не ошибку, а то, что смотришь не в ту ячейку.
